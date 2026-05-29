@@ -77,3 +77,33 @@ impl AudioOutput {
         })
     }
 }
+
+/// 不含 producer 的音频句柄, 留在 Player 中。
+pub struct AudioHandle {
+    pub stream: cpal::Stream,
+    pub clock: MasterClock,
+    pub channels: u16,
+    pub sample_rate: u32,
+}
+
+impl AudioOutput {
+    /// 拆分为 (留存句柄, 样本生产端)。producer 移入解码线程。
+    pub fn split(self) -> (AudioHandle, SampleProducer) {
+        let AudioOutput {
+            stream,
+            clock,
+            producer,
+            channels,
+            sample_rate,
+        } = self;
+        (
+            AudioHandle {
+                stream,
+                clock,
+                channels,
+                sample_rate,
+            },
+            producer,
+        )
+    }
+}

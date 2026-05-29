@@ -2,4 +2,4 @@
 mod clock;
 mod output;
 pub use clock::MasterClock;
-pub use output::{AudioOutput, SampleProducer};
+pub use output::{AudioHandle, AudioOutput, SampleProducer};
