@@ -29,6 +29,24 @@ impl Playlist {
         self.items.get(self.cursor)
     }
 
+    pub fn iter(&self) -> std::slice::Iter<'_, std::path::PathBuf> {
+        self.items.iter()
+    }
+
+    pub fn current_index(&self) -> Option<usize> {
+        if self.items.is_empty() {
+            None
+        } else {
+            Some(self.cursor)
+        }
+    }
+
+    pub fn set_cursor(&mut self, i: usize) {
+        if i < self.items.len() {
+            self.cursor = i;
+        }
+    }
+
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<&PathBuf> {
         if self.cursor + 1 < self.items.len() {
@@ -104,5 +122,22 @@ mod tests {
     fn next_on_empty_is_none() {
         let mut pl = Playlist::new();
         assert_eq!(pl.next(), None);
+    }
+
+    #[test]
+    fn iter_index_and_set_cursor() {
+        let mut pl = Playlist::new();
+        assert_eq!(pl.current_index(), None);
+        pl.add(p("/a.mp4"));
+        pl.add(p("/b.mp4"));
+        pl.add(p("/c.mp4"));
+        assert_eq!(pl.iter().count(), 3);
+        assert_eq!(pl.current_index(), Some(0));
+        pl.set_cursor(2);
+        assert_eq!(pl.current_index(), Some(2));
+        assert_eq!(pl.current(), Some(&p("/c.mp4")));
+        // 越界索引被忽略, 游标保持不变。
+        pl.set_cursor(9);
+        assert_eq!(pl.current_index(), Some(2));
     }
 }

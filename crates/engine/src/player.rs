@@ -11,8 +11,6 @@ use std::thread::JoinHandle;
 
 pub struct Player {
     machine: StateMachine,
-    // 预留: Next/Prev 命令将操作播放列表(当前为空实现)。
-    #[allow(dead_code)]
     playlist: Playlist,
     volume: u8,
     volume_shared: Arc<AtomicU8>,
@@ -65,9 +63,23 @@ impl Player {
         self.video.as_ref()
     }
 
+    pub fn playlist_paths(&self) -> Vec<std::path::PathBuf> {
+        self.playlist.iter().map(|p| p.to_path_buf()).collect()
+    }
+
+    pub fn current_index(&self) -> Option<usize> {
+        self.playlist.current_index()
+    }
+
     pub fn handle(&mut self, cmd: Command) {
         match cmd {
-            Command::Open(path) => self.open(&path),
+            Command::Open(path) => {
+                self.playlist.add(path.clone());
+                // 新打开的文件成为当前项(add 不移动游标, 故显式定位), UI 高亮才正确。
+                self.playlist
+                    .set_cursor(self.playlist.len().saturating_sub(1));
+                self.open(&path);
+            }
             Command::Play => {
                 if self.video.is_some() && self.machine.apply(player_core::Transition::Play).is_ok()
                 {
@@ -102,7 +114,23 @@ impl Player {
                     a.clock.reset_to(ms);
                 }
             }
-            Command::SetRate(_) | Command::Next | Command::Prev => {}
+            Command::SetRate(_) => {}
+            Command::Next => {
+                if let Some(p) = self.playlist.next().map(|p| p.to_path_buf()) {
+                    self.open(&p);
+                }
+            }
+            Command::Prev => {
+                if let Some(p) = self.playlist.prev().map(|p| p.to_path_buf()) {
+                    self.open(&p);
+                }
+            }
+            Command::PlayIndex(i) => {
+                self.playlist.set_cursor(i);
+                if let Some(p) = self.playlist.current().map(|p| p.to_path_buf()) {
+                    self.open(&p);
+                }
+            }
         }
     }
 

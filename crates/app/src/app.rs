@@ -33,6 +33,16 @@ impl eframe::App for PlayerApp {
             }
         });
 
+        egui::Panel::left("playlist")
+            .default_size(200.0)
+            .show_inside(ui, |ui| {
+                let paths = self.player.playlist_paths();
+                let cur = self.player.current_index();
+                for cmd in crate::playlist_panel::playlist_panel(ui, &paths, cur) {
+                    self.player.handle(cmd);
+                }
+            });
+
         egui::CentralPanel::default().show_inside(ui, |ui| {
             self.video_view.show(ui, frame, &self.player);
         });
