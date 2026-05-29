@@ -1,3 +1,5 @@
 .superpowers/
 target/
 /Cargo.lock
+.claude/settings.local.json
+crates/media/tests/fixtures/
