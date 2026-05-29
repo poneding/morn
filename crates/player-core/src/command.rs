@@ -18,6 +18,8 @@ pub enum Command {
     SetLoopA,
     SetLoopB,
     ClearLoop,
+    ToggleMute,
+    OpenDialog,
 }
 
 #[cfg(test)]
@@ -40,6 +42,8 @@ mod tests {
         assert_eq!(Command::SetLoopA, Command::SetLoopA);
         assert_eq!(Command::SetLoopB, Command::SetLoopB);
         assert_eq!(Command::ClearLoop, Command::ClearLoop);
+        assert_eq!(Command::ToggleMute, Command::ToggleMute);
+        assert_eq!(Command::OpenDialog, Command::OpenDialog);
         assert_ne!(Command::Play, Command::Pause);
     }
 }

@@ -14,6 +14,8 @@ pub struct Player {
     playlist: Playlist,
     volume: u8,
     volume_shared: Arc<AtomicU8>,
+    muted: bool,
+    volume_before_mute: u8,
     duration_ms: u64,
     video: Option<DecodeThread>,
     audio_out: Option<AudioHandle>,
@@ -35,6 +37,8 @@ impl Player {
             playlist: Playlist::new(),
             volume: 100,
             volume_shared: Arc::new(AtomicU8::new(100)),
+            muted: false,
+            volume_before_mute: 100,
             duration_ms: 0,
             video: None,
             audio_out: None,
@@ -76,6 +80,7 @@ impl Player {
                 .as_ref()
                 .map(|v| v.is_hardware())
                 .unwrap_or(false),
+            muted: self.muted,
         }
     }
 
@@ -107,6 +112,11 @@ impl Player {
         }
     }
 
+    fn handle_set_volume(&mut self, v: u8) {
+        self.volume = v.min(100);
+        self.volume_shared.store(v.min(100), Ordering::Relaxed);
+    }
+
     pub fn handle(&mut self, cmd: Command) {
         match cmd {
             Command::Open(path) => {
@@ -136,9 +146,20 @@ impl Player {
                 self.teardown();
             }
             Command::SetVolume(v) => {
-                self.volume = v.min(100);
-                self.volume_shared.store(v.min(100), Ordering::Relaxed);
+                self.muted = false;
+                self.handle_set_volume(v);
             }
+            Command::ToggleMute => {
+                if self.muted {
+                    self.muted = false;
+                    self.handle_set_volume(self.volume_before_mute);
+                } else {
+                    self.muted = true;
+                    self.volume_before_mute = self.volume;
+                    self.handle_set_volume(0);
+                }
+            }
+            Command::OpenDialog => {}
             Command::SeekTo(ms) => {
                 if let Some(v) = &self.video {
                     v.request_seek(ms);

@@ -8,6 +8,9 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
     let mut cmds = Vec::new();
 
     ui.horizontal(|ui| {
+        if ui.button("📂").on_hover_text("打开文件").clicked() {
+            cmds.push(Command::OpenDialog);
+        }
         let playing = t.state == PlaybackState::Playing;
         if ui.button(if playing { "⏸" } else { "▶" }).clicked() {
             cmds.push(if playing {
@@ -41,6 +44,11 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
             .changed()
         {
             cmds.push(Command::SetVolume(vol as u8));
+        }
+
+        let mute_icon = if t.muted { "🔇" } else { "🔊" };
+        if ui.button(mute_icon).on_hover_text("静音切换").clicked() {
+            cmds.push(Command::ToggleMute);
         }
 
         if ui.button("⛶").clicked() {

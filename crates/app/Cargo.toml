@@ -19,3 +19,4 @@ render = { path = "../render" }
 sync = { path = "../sync" }
 media = { path = "../media" }
 image = { version = "0.25", default-features = false, features = ["png"] }
+rfd = "0.15"

@@ -48,7 +48,16 @@ impl eframe::App for PlayerApp {
 
         egui::Panel::bottom("controls").show_inside(ui, |ui| {
             for cmd in controls::controls_bar(ui, &t) {
-                self.player.handle(cmd);
+                if let player_core::Command::OpenDialog = cmd {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("视频", &["mp4", "mkv", "webm", "mov", "avi"])
+                        .pick_file()
+                    {
+                        self.player.handle(player_core::Command::Open(path));
+                    }
+                } else {
+                    self.player.handle(cmd);
+                }
             }
             let actions = crate::enhance::enhance_bar(ui, self.rate_pct);
             for cmd in actions.commands {
