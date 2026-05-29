@@ -7,4 +7,3 @@ license.workspace = true
 [dependencies]
 cpal = "0.17"
 ringbuf = "0.5"
-media = { path = "../media" }
