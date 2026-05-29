@@ -6,5 +6,7 @@ license.workspace = true
 
 [dependencies]
 ffmpeg-next = "8.1"
+ffmpeg-sys-next = "8.1"
+libc = "0.2"
 crossbeam-channel = { workspace = true }
 thiserror = { workspace = true }
