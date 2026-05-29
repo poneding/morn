@@ -7,5 +7,5 @@ mod hwaccel;
 pub use audio_decoder::AudioDecoder;
 pub use decoder::VideoDecoder;
 pub use error::MediaError;
-pub use hwaccel::DecodeOptions;
 pub use frame::{AudioChunk, VideoFrame};
+pub use hwaccel::DecodeOptions;

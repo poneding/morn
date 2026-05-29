@@ -30,16 +30,14 @@ use std::ffi::CString;
 use std::ptr;
 
 /// RAII 包装一个 AVBufferRef* 硬件设备上下文。
-// device_type / hw_pix_fmt 在任务 4 由 VideoDecoder 读取; 此前无读者, 暂 allow, 届时移除。
-#[allow(dead_code)]
 pub struct HwDeviceContext {
     ptr: *mut sys::AVBufferRef,
+    /// 记录所选设备类型, 便于调试/日志; 当前 decoder 仅用 hw_pix_fmt 与指针。
+    #[allow(dead_code)]
     pub device_type: sys::AVHWDeviceType,
     pub hw_pix_fmt: sys::AVPixelFormat,
 }
 
-// 任务 2 仅提供封装; 任务 4 的 VideoDecoder 会调用 create/as_ptr, 届时这些 allow 失效并移除。
-#[allow(dead_code)]
 impl HwDeviceContext {
     /// 按平台名创建硬件设备上下文。失败返回 None(调用方回退软解)。
     pub fn create_for_current_platform() -> Option<Self> {
@@ -85,8 +83,6 @@ impl Drop for HwDeviceContext {
     }
 }
 
-// 由 create_for_current_platform 调用; 任务 4 接通整条链路后此 allow 失效并移除。
-#[allow(dead_code)]
 fn hw_pix_fmt_for(t: sys::AVHWDeviceType) -> sys::AVPixelFormat {
     use sys::AVHWDeviceType::*;
     use sys::AVPixelFormat::*;
@@ -99,8 +95,6 @@ fn hw_pix_fmt_for(t: sys::AVHWDeviceType) -> sys::AVPixelFormat {
 }
 
 /// 存入 AVCodecContext.opaque, 供 get_format 回调读取目标硬件格式。
-// 任务 4 由 VideoDecoder 构造并存入 opaque; 此前无构造点, 暂 allow, 届时移除。
-#[allow(dead_code)]
 pub struct HwCallbackData {
     pub hw_pix_fmt: sys::AVPixelFormat,
 }
@@ -111,8 +105,6 @@ pub struct HwCallbackData {
 /// 由 FFmpeg 在解码时调用。`ctx` 非空且其 `opaque` 指向有效的 HwCallbackData
 /// (在 setup 时设置, 生命周期由 VideoDecoder 持有)。`fmt` 是以 AV_PIX_FMT_NONE
 /// 结尾的有效格式数组指针。
-// 任务 4 设为 AVCodecContext.get_format 回调; 此前无引用, 暂 allow, 届时移除。
-#[allow(dead_code)]
 pub unsafe extern "C" fn get_hw_format(
     ctx: *mut sys::AVCodecContext,
     fmt: *const sys::AVPixelFormat,
@@ -139,8 +131,6 @@ pub unsafe extern "C" fn get_hw_format(
 /// # Safety
 /// `hw_frame` 与 `sw_frame` 均为有效 AVFrame 指针; hw_frame 持有硬件表面,
 /// sw_frame 为可写目标(可为空帧, transfer 会按需分配缓冲)。
-// 任务 4 在 download_and_scale 调用; 此前无引用, 暂 allow, 届时移除。
-#[allow(dead_code)]
 pub unsafe fn transfer_hw_frame(
     hw_frame: *const sys::AVFrame,
     sw_frame: *mut sys::AVFrame,

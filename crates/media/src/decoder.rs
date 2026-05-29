@@ -1,25 +1,35 @@
 use crate::error::MediaError;
 use crate::frame::VideoFrame;
+use crate::hwaccel::{DecodeOptions, HwCallbackData, HwDeviceContext};
 use ff::format::Pixel;
 use ff::media::Type;
 use ff::software::scaling::{context::Context as Scaler, flag::Flags};
 use ff::util::frame::video::Video as FfVideo;
 use ffmpeg_next as ff;
+use ffmpeg_sys_next as sys;
 use std::path::Path;
 
 pub struct VideoDecoder {
     ictx: ff::format::context::Input,
     decoder: ff::decoder::Video,
-    scaler: Scaler,
+    scaler: Option<Scaler>,
     stream_index: usize,
     time_base: f64,
     width: u32,
     height: u32,
     eof: bool,
+    is_hardware: bool,
+    _hw_device: Option<HwDeviceContext>,
+    _hw_cb_data: Option<Box<HwCallbackData>>,
+    hw_pix_fmt: sys::AVPixelFormat,
 }
 
 impl VideoDecoder {
     pub fn open(path: &Path) -> Result<Self, MediaError> {
+        Self::open_with_options(path, DecodeOptions::default())
+    }
+
+    pub fn open_with_options(path: &Path, opts: DecodeOptions) -> Result<Self, MediaError> {
         ff::init()?;
         let ictx = ff::format::input(&path)?;
         let stream = ictx
@@ -29,27 +39,57 @@ impl VideoDecoder {
         let stream_index = stream.index();
         let time_base = f64::from(stream.time_base());
         let ctx = ff::codec::context::Context::from_parameters(stream.parameters())?;
-        let decoder = ctx.decoder().video()?;
+        let mut decoder = ctx.decoder().video()?;
+
+        let mut is_hardware = false;
+        let mut hw_device = None;
+        let mut hw_cb_data: Option<Box<HwCallbackData>> = None;
+        let mut hw_pix_fmt = sys::AVPixelFormat::AV_PIX_FMT_NONE;
+
+        if opts.try_hardware {
+            if let Some(dev) = HwDeviceContext::create_for_current_platform() {
+                let mut cb = Box::new(HwCallbackData {
+                    hw_pix_fmt: dev.hw_pix_fmt,
+                });
+                // SAFETY: decoder.as_mut_ptr() 返回有效 *mut AVCodecContext。我们:
+                // (1) 把 opaque 指向 boxed HwCallbackData——该 box 存入 self._hw_cb_data,
+                //     在 decoder 存活期间不移动/释放, 故裸指针在回调期间有效;
+                // (2) hw_device_ctx 用 av_buffer_ref 增引用(dev 的 Drop 释放其自身引用,
+                //     codec 关闭时释放此引用);
+                // (3) get_format 设为我们的 extern "C" 回调。
+                unsafe {
+                    let avctx = decoder.as_mut_ptr();
+                    (*avctx).opaque = (cb.as_mut() as *mut HwCallbackData) as *mut std::ffi::c_void;
+                    (*avctx).hw_device_ctx = sys::av_buffer_ref(dev.as_ptr());
+                    (*avctx).get_format = Some(crate::hwaccel::get_hw_format);
+                }
+                hw_pix_fmt = dev.hw_pix_fmt;
+                hw_cb_data = Some(cb);
+                hw_device = Some(dev);
+                is_hardware = true;
+            }
+        }
+
         let (width, height) = (decoder.width(), decoder.height());
-        let scaler = Scaler::get(
-            decoder.format(),
-            width,
-            height,
-            Pixel::RGBA,
-            width,
-            height,
-            Flags::BILINEAR,
-        )?;
+
         Ok(Self {
             ictx,
             decoder,
-            scaler,
+            scaler: None, // lazy: 首帧按实际格式构建
             stream_index,
             time_base,
             width,
             height,
             eof: false,
+            is_hardware,
+            _hw_device: hw_device,
+            _hw_cb_data: hw_cb_data,
+            hw_pix_fmt,
         })
+    }
+
+    pub fn is_hardware(&self) -> bool {
+        self.is_hardware
     }
 
     pub fn width(&self) -> u32 {
@@ -64,7 +104,14 @@ impl VideoDecoder {
         loop {
             let mut decoded = FfVideo::empty();
             if self.decoder.receive_frame(&mut decoded).is_ok() {
-                return Ok(Some(self.scale(&decoded)?));
+                let frame = if self.is_hardware && self.frame_is_hw(&decoded) {
+                    self.download_and_scale(&decoded)?
+                } else {
+                    let fmt = decoded.format(); // SAFE accessor — no transmute
+                    self.ensure_scaler(fmt)?;
+                    self.scale_software(&decoded)?
+                };
+                return Ok(Some(frame));
             }
             if self.eof {
                 return Ok(None);
@@ -96,9 +143,43 @@ impl VideoDecoder {
         }
     }
 
-    fn scale(&mut self, decoded: &FfVideo) -> Result<VideoFrame, MediaError> {
+    fn ensure_scaler(&mut self, src_fmt: Pixel) -> Result<(), MediaError> {
+        if self.scaler.is_none() {
+            self.scaler = Some(Scaler::get(
+                src_fmt,
+                self.width,
+                self.height,
+                Pixel::RGBA,
+                self.width,
+                self.height,
+                Flags::BILINEAR,
+            )?);
+        }
+        Ok(())
+    }
+
+    fn frame_is_hw(&self, frame: &FfVideo) -> bool {
+        // SAFE: compare the frame's Pixel format to the hw format (no unsafe).
+        frame.format() == Pixel::from(self.hw_pix_fmt)
+    }
+
+    fn download_and_scale(&mut self, hw: &FfVideo) -> Result<VideoFrame, MediaError> {
+        let mut sw = FfVideo::empty();
+        // SAFETY: hw.as_ptr() 是有效硬件帧指针; sw.as_mut_ptr() 是有效空帧,
+        // transfer_hw_frame 内部调用 av_hwframe_transfer_data 下载到 sw(按需分配)。
+        let ok = unsafe { crate::hwaccel::transfer_hw_frame(hw.as_ptr(), sw.as_mut_ptr()) };
+        if !ok {
+            return Err(MediaError::NoStream("hw transfer failed"));
+        }
+        let fmt = sw.format(); // SAFE accessor
+        self.ensure_scaler(fmt)?;
+        self.scale_software(&sw)
+    }
+
+    fn scale_software(&mut self, decoded: &FfVideo) -> Result<VideoFrame, MediaError> {
+        let scaler = self.scaler.as_mut().expect("scaler 已构建");
         let mut rgba = FfVideo::empty();
-        self.scaler.run(decoded, &mut rgba)?;
+        scaler.run(decoded, &mut rgba)?;
         let pts = decoded.pts().unwrap_or(0);
         let pts_ms = (pts as f64 * self.time_base * 1000.0).max(0.0) as u64;
         let stride = rgba.stride(0);
