@@ -1,0 +1,19 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "morn"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.34"
+egui = "0.34"
+egui-wgpu = "0.34"
+wgpu = "29.0"
+engine = { path = "../engine" }
+player-core = { path = "../player-core" }
+render = { path = "../render" }
+sync = { path = "../sync" }
