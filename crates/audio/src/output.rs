@@ -86,6 +86,28 @@ pub struct AudioHandle {
     pub sample_rate: u32,
 }
 
+impl AudioHandle {
+    pub fn pause(&self) {
+        use cpal::traits::StreamTrait;
+        let _ = self.stream.pause();
+    }
+    pub fn resume(&self) {
+        use cpal::traits::StreamTrait;
+        let _ = self.stream.play();
+    }
+}
+
+/// 把 0..=100 的音量作为线性增益作用于交错样本(就地)。
+pub fn apply_gain(samples: &mut [f32], volume: u8) {
+    let g = volume.min(100) as f32 / 100.0;
+    if (g - 1.0).abs() < f32::EPSILON {
+        return;
+    }
+    for s in samples.iter_mut() {
+        *s *= g;
+    }
+}
+
 impl AudioOutput {
     /// 拆分为 (留存句柄, 样本生产端)。producer 移入解码线程。
     pub fn split(self) -> (AudioHandle, SampleProducer) {
@@ -105,5 +127,30 @@ impl AudioOutput {
             },
             producer,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_gain;
+
+    #[test]
+    fn gain_100_is_unchanged() {
+        let mut s = [0.5f32, -0.5];
+        apply_gain(&mut s, 100);
+        assert!((s[0] - 0.5).abs() < 1e-6);
+    }
+    #[test]
+    fn gain_50_halves() {
+        let mut s = [0.8f32, -0.8];
+        apply_gain(&mut s, 50);
+        assert!((s[0] - 0.4).abs() < 1e-6);
+        assert!((s[1] + 0.4).abs() < 1e-6);
+    }
+    #[test]
+    fn gain_0_is_silence() {
+        let mut s = [0.9f32, -0.9];
+        apply_gain(&mut s, 0);
+        assert_eq!(s, [0.0, 0.0]);
     }
 }
