@@ -9,6 +9,7 @@ player-core = { path = "../player-core" }
 media = { path = "../media" }
 audio = { path = "../audio" }
 sync = { path = "../sync" }
+subtitle = { path = "../subtitle" }
 crossbeam-channel = { workspace = true }
 ffmpeg-next = "8.1"
 ringbuf = "0.5"

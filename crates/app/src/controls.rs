@@ -54,9 +54,3 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
 
     cmds
 }
-
-/// 检查本帧拖入的文件, 返回 Open 命令。
-pub fn dropped_file_command(ctx: &egui::Context) -> Option<Command> {
-    let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-    dropped.into_iter().find_map(|f| f.path).map(Command::Open)
-}

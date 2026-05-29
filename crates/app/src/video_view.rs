@@ -59,6 +59,11 @@ impl VideoView {
                 ui.label("拖入视频文件开始播放");
             });
         }
+
+        let rect = ui.min_rect();
+        if let Some(text) = player.current_subtitle() {
+            crate::subtitle_overlay::draw_subtitle(ui, rect, &text);
+        }
     }
 
     fn upload(&mut self, frame: &mut eframe::Frame, vf: &media::VideoFrame) {

@@ -21,6 +21,7 @@ pub struct Player {
     audio_stop: Arc<AtomicBool>,
     // u64::MAX 表示无待处理 seek; 否则为目标毫秒, 音频线程消费后复位。
     audio_seek: Arc<AtomicU64>,
+    subtitles: Option<subtitle::Subtitles>,
 }
 
 impl Player {
@@ -36,6 +37,7 @@ impl Player {
             audio_join: None,
             audio_stop: Arc::new(AtomicBool::new(false)),
             audio_seek: Arc::new(AtomicU64::new(u64::MAX)),
+            subtitles: None,
         }
     }
 
@@ -69,6 +71,21 @@ impl Player {
 
     pub fn current_index(&self) -> Option<usize> {
         self.playlist.current_index()
+    }
+
+    pub fn current_subtitle(&self) -> Option<String> {
+        let pos = self.timeline().position_ms;
+        self.subtitles
+            .as_ref()
+            .and_then(|s| s.text_at(pos))
+            .map(|t| t.to_string())
+    }
+
+    /// 手动加载字幕文件(拖入 .srt/.ass 时)。
+    pub fn load_subtitle(&mut self, path: &Path) {
+        if let Ok(s) = subtitle::load_file(path) {
+            self.subtitles = Some(s);
+        }
     }
 
     pub fn handle(&mut self, cmd: Command) {
@@ -198,6 +215,7 @@ impl Player {
         }
 
         self.video = Some(video);
+        self.subtitles = sidecar_subtitle(path);
         let _ = self.machine.apply(player_core::Transition::Play);
     }
 
@@ -220,6 +238,18 @@ impl Default for Player {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn sidecar_subtitle(video: &Path) -> Option<subtitle::Subtitles> {
+    for ext in ["srt", "ass", "ssa"] {
+        let p = video.with_extension(ext);
+        if p.exists() {
+            if let Ok(s) = subtitle::load_file(&p) {
+                return Some(s);
+            }
+        }
+    }
+    None
 }
 
 fn probe_duration_ms(path: &Path) -> Option<u64> {

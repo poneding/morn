@@ -1,6 +1,7 @@
 mod app;
 mod controls;
 mod playlist_panel;
+mod subtitle_overlay;
 mod video_view;
 
 use app::PlayerApp;
