@@ -1,0 +1,12 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+player-core = { path = "../player-core" }
+media = { path = "../media" }
+audio = { path = "../audio" }
+sync = { path = "../sync" }
+crossbeam-channel = { workspace = true }
