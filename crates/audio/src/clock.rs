@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// 音频主时钟。回调线程累加已消费帧数, 任意线程读取播放位置。
@@ -6,6 +6,7 @@ use std::sync::Arc;
 pub struct MasterClock {
     frames_played: Arc<AtomicU64>,
     sample_rate: u32,
+    rate: Arc<AtomicU32>,
 }
 
 impl MasterClock {
@@ -13,6 +14,7 @@ impl MasterClock {
         Self {
             frames_played: Arc::new(AtomicU64::new(0)),
             sample_rate: sample_rate.max(1),
+            rate: Arc::new(AtomicU32::new(100)),
         }
     }
 
@@ -24,7 +26,13 @@ impl MasterClock {
     /// 当前播放位置(毫秒)。
     pub fn position_ms(&self) -> u64 {
         let f = self.frames_played.load(Ordering::Relaxed);
-        f * 1000 / self.sample_rate as u64
+        let base = f * 1000 / self.sample_rate as u64;
+        base * self.rate.load(Ordering::Relaxed) as u64 / 100
+    }
+
+    /// 设置倍速百分比 (100 = 1.0x)。影响 position_ms 读数(视频帧节奏)。
+    pub fn set_rate(&self, pct: u16) {
+        self.rate.store(pct as u32, Ordering::Relaxed);
     }
 
     /// seek 后重置时钟基准。
@@ -64,5 +72,20 @@ mod tests {
         c.add_frames(250);
         c.add_frames(250);
         assert_eq!(c.position_ms(), 500);
+    }
+
+    #[test]
+    fn default_rate_is_realtime() {
+        let c = MasterClock::new(1000);
+        c.add_frames(1000);
+        assert_eq!(c.position_ms(), 1000);
+    }
+
+    #[test]
+    fn double_rate_doubles_position() {
+        let c = MasterClock::new(1000);
+        c.add_frames(1000);
+        c.set_rate(200);
+        assert_eq!(c.position_ms(), 2000);
     }
 }

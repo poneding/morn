@@ -22,6 +22,8 @@ pub struct Player {
     // u64::MAX 表示无待处理 seek; 否则为目标毫秒, 音频线程消费后复位。
     audio_seek: Arc<AtomicU64>,
     subtitles: Option<subtitle::Subtitles>,
+    loop_a: Option<u64>,
+    loop_b: Option<u64>,
 }
 
 impl Player {
@@ -38,6 +40,8 @@ impl Player {
             audio_stop: Arc::new(AtomicBool::new(false)),
             audio_seek: Arc::new(AtomicU64::new(u64::MAX)),
             subtitles: None,
+            loop_a: None,
+            loop_b: None,
         }
     }
 
@@ -131,7 +135,18 @@ impl Player {
                     a.clock.reset_to(ms);
                 }
             }
-            Command::SetRate(_) => {}
+            Command::SetRate(pct) => {
+                if let Some(a) = &self.audio_out {
+                    a.clock.set_rate(pct);
+                }
+            }
+            Command::StepFrame => self.step_frame(),
+            Command::SetLoopA => self.loop_a = Some(self.timeline().position_ms),
+            Command::SetLoopB => self.loop_b = Some(self.timeline().position_ms),
+            Command::ClearLoop => {
+                self.loop_a = None;
+                self.loop_b = None;
+            }
             Command::Next => {
                 if let Some(p) = self.playlist.next().map(|p| p.to_path_buf()) {
                     self.open(&p);
@@ -147,6 +162,25 @@ impl Player {
                 if let Some(p) = self.playlist.current().map(|p| p.to_path_buf()) {
                     self.open(&p);
                 }
+            }
+        }
+    }
+
+    /// 暂停状态下手动前进一帧(假设约 30fps → 33ms)。
+    pub fn step_frame(&mut self) {
+        if self.machine.state() == player_core::PlaybackState::Paused {
+            let pos = self.timeline().position_ms;
+            if let Some(a) = &self.audio_out {
+                a.clock.reset_to(pos + 33);
+            }
+        }
+    }
+
+    /// UI 每帧调用: 到达 B 点则跳回 A 点(AB 循环)。
+    pub fn tick(&mut self) {
+        if let (Some(a), Some(b)) = (self.loop_a, self.loop_b) {
+            if self.timeline().position_ms >= b {
+                self.handle(player_core::Command::SeekTo(a));
             }
         }
     }

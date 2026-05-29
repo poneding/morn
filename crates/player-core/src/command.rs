@@ -14,6 +14,10 @@ pub enum Command {
     Next,
     Prev,
     PlayIndex(usize),
+    StepFrame,
+    SetLoopA,
+    SetLoopB,
+    ClearLoop,
 }
 
 #[cfg(test)]
@@ -32,6 +36,10 @@ mod tests {
         assert_eq!(Command::SetVolume(80), Command::SetVolume(80));
         assert_eq!(Command::SetRate(150), Command::SetRate(150));
         assert_eq!(Command::PlayIndex(2), Command::PlayIndex(2));
+        assert_eq!(Command::StepFrame, Command::StepFrame);
+        assert_eq!(Command::SetLoopA, Command::SetLoopA);
+        assert_eq!(Command::SetLoopB, Command::SetLoopB);
+        assert_eq!(Command::ClearLoop, Command::ClearLoop);
         assert_ne!(Command::Play, Command::Pause);
     }
 }
