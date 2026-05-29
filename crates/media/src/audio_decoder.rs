@@ -1,10 +1,10 @@
 use crate::error::MediaError;
 use crate::frame::AudioChunk;
-use ffmpeg_next as ff;
 use ff::format::sample::{Sample, Type as SampleType};
 use ff::media::Type;
 use ff::util::frame::audio::Audio as FfAudio;
 use ff::ChannelLayout;
+use ffmpeg_next as ff;
 use std::path::Path;
 
 pub struct AudioDecoder {

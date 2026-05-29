@@ -1,10 +1,10 @@
 use crate::error::MediaError;
 use crate::frame::VideoFrame;
-use ffmpeg_next as ff;
 use ff::format::Pixel;
 use ff::media::Type;
 use ff::software::scaling::{context::Context as Scaler, flag::Flags};
 use ff::util::frame::video::Video as FfVideo;
+use ffmpeg_next as ff;
 use std::path::Path;
 
 pub struct VideoDecoder {

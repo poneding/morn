@@ -21,7 +21,10 @@ fn decodes_audio_to_f32_chunks() {
         total_frames += chunk.frame_count();
     }
     let expected = dec.sample_rate() as usize;
-    assert!(total_frames > expected * 9 / 10, "音频帧数 {total_frames} 偏少");
+    assert!(
+        total_frames > expected * 9 / 10,
+        "音频帧数 {total_frames} 偏少"
+    );
 }
 
 #[test]

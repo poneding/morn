@@ -41,7 +41,10 @@ fn main() {
             match sync::decide_frame(master, frame.pts_ms, tol_ms) {
                 sync::FrameDecision::Display => {
                     shown += 1;
-                    println!("显示帧 {shown} @ pts={}ms 主时钟={}ms", frame.pts_ms, master);
+                    println!(
+                        "显示帧 {shown} @ pts={}ms 主时钟={}ms",
+                        frame.pts_ms, master
+                    );
                     break;
                 }
                 sync::FrameDecision::Drop => {

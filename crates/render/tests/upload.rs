@@ -4,7 +4,8 @@ use render::VideoTexture;
 fn creates_and_uploads_without_panicking() {
     // 申请一个 headless 适配器; 无 GPU 环境则跳过(CI 容器常见)。
     let instance = wgpu::Instance::default();
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
     let Ok(adapter) = adapter else {
         eprintln!("无可用 GPU 适配器, 跳过测试");
         return;
