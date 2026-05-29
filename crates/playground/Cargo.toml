@@ -1,0 +1,11 @@
+[package]
+name = "playground"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+media = { path = "../media" }
+audio = { path = "../audio" }
+sync = { path = "../sync" }
+ringbuf = "0.5"
