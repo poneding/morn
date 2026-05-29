@@ -41,3 +41,15 @@ fn forcing_software_still_works() {
     }
     assert!((23..=27).contains(&count));
 }
+
+#[test]
+fn observed_hardware_matches_forced_software() {
+    // 强制软解时, 解码一帧后 observed_hardware() 必为 false。
+    let path = fixture();
+    let opts = DecodeOptions {
+        try_hardware: false,
+    };
+    let mut dec = VideoDecoder::open_with_options(&path, opts).unwrap();
+    assert!(dec.next_frame().unwrap().is_some());
+    assert!(!dec.observed_hardware());
+}

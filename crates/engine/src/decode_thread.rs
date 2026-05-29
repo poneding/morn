@@ -18,6 +18,7 @@ pub enum FramePull {
 pub struct DecodeThread {
     rx: Receiver<VideoFrame>,
     stop: Arc<AtomicBool>,
+    hw_active: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -29,6 +30,8 @@ impl DecodeThread {
         let (tx, rx): (Sender<VideoFrame>, Receiver<VideoFrame>) = bounded(queue_cap);
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
+        let hw_active = Arc::new(AtomicBool::new(false));
+        let hw_active_t = hw_active.clone();
 
         let join = std::thread::spawn(move || {
             // 解码器在工作线程内打开, 满足 !Send 约束; 上面已校验过可打开。
@@ -39,6 +42,7 @@ impl DecodeThread {
             while !stop_thread.load(Ordering::Relaxed) {
                 match decoder.next_frame() {
                     Ok(Some(frame)) => {
+                        hw_active_t.store(decoder.observed_hardware(), Ordering::Relaxed);
                         if tx.send(frame).is_err() {
                             break;
                         }
@@ -52,6 +56,7 @@ impl DecodeThread {
         Ok(Self {
             rx,
             stop,
+            hw_active,
             join: Some(join),
         })
     }
@@ -67,6 +72,11 @@ impl DecodeThread {
     /// 非阻塞取帧; 无帧返回 None。UI 线程用这个避免卡顿。
     pub fn try_recv_frame(&self) -> Option<VideoFrame> {
         self.rx.try_recv().ok()
+    }
+
+    /// 当前是否实际硬件解码(由解码线程按帧更新)。
+    pub fn is_hardware(&self) -> bool {
+        self.hw_active.load(Ordering::Relaxed)
     }
 
     pub fn stop(mut self) {

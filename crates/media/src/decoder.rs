@@ -19,6 +19,7 @@ pub struct VideoDecoder {
     height: u32,
     eof: bool,
     is_hardware: bool,
+    decoded_in_hardware: bool,
     _hw_device: Option<HwDeviceContext>,
     _hw_cb_data: Option<Box<HwCallbackData>>,
     hw_pix_fmt: sys::AVPixelFormat,
@@ -83,6 +84,7 @@ impl VideoDecoder {
             height,
             eof: false,
             is_hardware,
+            decoded_in_hardware: false,
             _hw_device: hw_device,
             _hw_cb_data: hw_cb_data,
             hw_pix_fmt,
@@ -91,6 +93,11 @@ impl VideoDecoder {
 
     pub fn is_hardware(&self) -> bool {
         self.is_hardware
+    }
+
+    /// 最近一帧是否实际走了硬件解码路径(区别于 is_hardware 的"意图")。
+    pub fn observed_hardware(&self) -> bool {
+        self.decoded_in_hardware
     }
 
     pub fn width(&self) -> u32 {
@@ -106,8 +113,10 @@ impl VideoDecoder {
             let mut decoded = FfVideo::empty();
             if self.decoder.receive_frame(&mut decoded).is_ok() {
                 let frame = if self.is_hardware && self.frame_is_hw(&decoded) {
+                    self.decoded_in_hardware = true;
                     self.download_and_scale(&decoded)?
                 } else {
+                    self.decoded_in_hardware = false;
                     let fmt = decoded.format(); // SAFE accessor — no transmute
                     self.ensure_scaler(fmt)?;
                     self.scale_software(&decoded)?

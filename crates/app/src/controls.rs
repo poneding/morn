@@ -48,6 +48,8 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
         }
+
+        ui.label(if t.hardware_decode { "HW" } else { "SW" });
     });
 
     cmds

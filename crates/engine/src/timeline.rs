@@ -7,6 +7,7 @@ pub struct Timeline {
     pub duration_ms: u64,
     pub state: PlaybackState,
     pub volume: u8,
+    pub hardware_decode: bool,
 }
 
 impl Timeline {
@@ -44,6 +45,7 @@ mod tests {
             duration_ms: 125_000,
             state: PlaybackState::Playing,
             volume: 100,
+            hardware_decode: false,
         };
         assert_eq!(t.position_label(), "01:05");
         assert_eq!(t.duration_label(), "02:05");
@@ -56,6 +58,7 @@ mod tests {
             duration_ms: 100_000,
             state: PlaybackState::Playing,
             volume: 100,
+            hardware_decode: false,
         };
         assert!((t.progress() - 0.5).abs() < 1e-6);
     }
@@ -67,6 +70,7 @@ mod tests {
             duration_ms: 0,
             state: PlaybackState::Stopped,
             volume: 100,
+            hardware_decode: false,
         };
         assert_eq!(t.progress(), 0.0);
     }

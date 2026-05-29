@@ -47,6 +47,11 @@ impl Player {
             duration_ms: self.duration_ms,
             state: self.machine.state(),
             volume: self.volume,
+            hardware_decode: self
+                .video
+                .as_ref()
+                .map(|v| v.is_hardware())
+                .unwrap_or(false),
         }
     }
 
