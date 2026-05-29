@@ -98,6 +98,63 @@ fn hw_pix_fmt_for(t: sys::AVHWDeviceType) -> sys::AVPixelFormat {
     }
 }
 
+/// 存入 AVCodecContext.opaque, 供 get_format 回调读取目标硬件格式。
+// 任务 4 由 VideoDecoder 构造并存入 opaque; 此前无构造点, 暂 allow, 届时移除。
+#[allow(dead_code)]
+pub struct HwCallbackData {
+    pub hw_pix_fmt: sys::AVPixelFormat,
+}
+
+/// get_format 回调: 在候选格式列表中选我们的硬件格式; 找不到则回退首个(软)格式。
+///
+/// # Safety
+/// 由 FFmpeg 在解码时调用。`ctx` 非空且其 `opaque` 指向有效的 HwCallbackData
+/// (在 setup 时设置, 生命周期由 VideoDecoder 持有)。`fmt` 是以 AV_PIX_FMT_NONE
+/// 结尾的有效格式数组指针。
+// 任务 4 设为 AVCodecContext.get_format 回调; 此前无引用, 暂 allow, 届时移除。
+#[allow(dead_code)]
+pub unsafe extern "C" fn get_hw_format(
+    ctx: *mut sys::AVCodecContext,
+    fmt: *const sys::AVPixelFormat,
+) -> sys::AVPixelFormat {
+    let data = (*ctx).opaque as *const HwCallbackData;
+    if data.is_null() {
+        return *fmt; // 无数据, 返回第一个候选
+    }
+    let want = (*data).hw_pix_fmt;
+
+    let mut p = fmt;
+    while *p != sys::AVPixelFormat::AV_PIX_FMT_NONE {
+        if *p == want {
+            return want;
+        }
+        p = p.add(1);
+    }
+    // 未找到硬件格式: 返回第一个候选(通常软格式), 等效回退。
+    *fmt
+}
+
+/// 把硬件帧下载到内存帧。成功返回 true。
+///
+/// # Safety
+/// `hw_frame` 与 `sw_frame` 均为有效 AVFrame 指针; hw_frame 持有硬件表面,
+/// sw_frame 为可写目标(可为空帧, transfer 会按需分配缓冲)。
+// 任务 4 在 download_and_scale 调用; 此前无引用, 暂 allow, 届时移除。
+#[allow(dead_code)]
+pub unsafe fn transfer_hw_frame(
+    hw_frame: *const sys::AVFrame,
+    sw_frame: *mut sys::AVFrame,
+) -> bool {
+    // av_hwframe_transfer_data: dst, src, flags
+    let ret = sys::av_hwframe_transfer_data(sw_frame, hw_frame, 0);
+    if ret < 0 {
+        return false;
+    }
+    // 拷贝 PTS 等元数据
+    (*sw_frame).pts = (*hw_frame).pts;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
