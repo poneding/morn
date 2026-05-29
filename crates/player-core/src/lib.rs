@@ -2,3 +2,6 @@
 
 mod state;
 pub use state::{InvalidTransition, PlaybackState, StateMachine, Transition};
+
+mod command;
+pub use command::Command;
