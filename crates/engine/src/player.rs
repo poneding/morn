@@ -24,6 +24,8 @@ pub struct Player {
     subtitles: Option<subtitle::Subtitles>,
     loop_a: Option<u64>,
     loop_b: Option<u64>,
+    prefs: persist::Preferences,
+    prefs_path: std::path::PathBuf,
 }
 
 impl Player {
@@ -42,7 +44,20 @@ impl Player {
             subtitles: None,
             loop_a: None,
             loop_b: None,
+            prefs: persist::Preferences::default(),
+            prefs_path: std::path::PathBuf::new(),
         }
+    }
+
+    /// 以指定路径加载偏好后构造 Player(续播位置/音量等从磁盘恢复)。
+    pub fn with_prefs(prefs_path: std::path::PathBuf) -> Self {
+        let prefs = persist::Preferences::load(&prefs_path).unwrap_or_default();
+        let mut p = Self::new();
+        p.volume = prefs.volume;
+        p.volume_shared.store(prefs.volume, Ordering::Relaxed);
+        p.prefs = prefs;
+        p.prefs_path = prefs_path;
+        p
     }
 
     pub fn timeline(&self) -> Timeline {
@@ -185,6 +200,25 @@ impl Player {
         }
     }
 
+    /// 保存当前文件的续播位置与音量偏好到磁盘。
+    pub fn save_state(&mut self) {
+        let key = self
+            .playlist
+            .current()
+            .map(|p| p.to_string_lossy().to_string());
+        if let Some(key) = key {
+            let pos = self.timeline().position_ms;
+            if self.duration_ms > 0 && pos + 5000 < self.duration_ms {
+                self.prefs.set_resume_point(&key, pos);
+            } else {
+                // 接近结尾(或时长未知): 清除续播点, 下次从头播。
+                self.prefs.set_resume_point(&key, 0);
+            }
+        }
+        self.prefs.volume = self.volume;
+        let _ = self.prefs.save(&self.prefs_path);
+    }
+
     fn open(&mut self, path: &Path) {
         self.teardown();
 
@@ -251,6 +285,20 @@ impl Player {
         self.video = Some(video);
         self.subtitles = sidecar_subtitle(path);
         let _ = self.machine.apply(player_core::Transition::Play);
+
+        // 续播: 若该文件记录了有意义的进度(>3s), 打开后直接 seek 到该位置。
+        let key = path.to_string_lossy().to_string();
+        if let Some(ms) = self.prefs.resume_point(&key) {
+            if ms > 3000 {
+                if let Some(v) = &self.video {
+                    v.request_seek(ms);
+                }
+                self.audio_seek.store(ms, Ordering::Relaxed);
+                if let Some(a) = &self.audio_out {
+                    a.clock.reset_to(ms);
+                }
+            }
+        }
     }
 
     fn teardown(&mut self) {

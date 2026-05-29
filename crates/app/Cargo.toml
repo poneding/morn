@@ -9,7 +9,7 @@ name = "morn"
 path = "src/main.rs"
 
 [dependencies]
-eframe = "0.34"
+eframe = { version = "0.34", features = ["persistence"] }
 egui = "0.34"
 egui-wgpu = "0.34"
 wgpu = "29.0"

@@ -12,11 +12,15 @@ pub struct PlayerApp {
 impl PlayerApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self {
-            player: Player::new(),
+            player: Player::with_prefs(prefs_path()),
             video_view: VideoView::new(),
             rate_pct: 100,
         }
     }
+}
+
+fn prefs_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("morn-prefs.json")
 }
 
 impl eframe::App for PlayerApp {
@@ -78,5 +82,9 @@ impl eframe::App for PlayerApp {
         });
 
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.player.save_state();
     }
 }
