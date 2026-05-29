@@ -20,6 +20,7 @@ pub enum Command {
     ClearLoop,
     ToggleMute,
     OpenDialog,
+    SelectSubtitleTrack(usize),
 }
 
 #[cfg(test)]
@@ -44,6 +45,10 @@ mod tests {
         assert_eq!(Command::ClearLoop, Command::ClearLoop);
         assert_eq!(Command::ToggleMute, Command::ToggleMute);
         assert_eq!(Command::OpenDialog, Command::OpenDialog);
+        assert_eq!(
+            Command::SelectSubtitleTrack(1),
+            Command::SelectSubtitleTrack(1)
+        );
         assert_ne!(Command::Play, Command::Pause);
     }
 }

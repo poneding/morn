@@ -74,6 +74,12 @@ impl eframe::App for PlayerApp {
                     }
                 }
             }
+            let tracks = self.player.subtitle_tracks().to_vec();
+            if !tracks.is_empty() {
+                if let Some(cmd) = controls::subtitle_track_combo(ui, &tracks) {
+                    self.player.handle(cmd);
+                }
+            }
         });
 
         egui::Panel::left("playlist")

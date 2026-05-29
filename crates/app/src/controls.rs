@@ -62,3 +62,18 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
 
     cmds
 }
+
+/// 字幕轨道下拉; 选中某轨返回 SelectSubtitleTrack(stream_index)。
+pub fn subtitle_track_combo(ui: &mut egui::Ui, tracks: &[media::SubtitleTrack]) -> Option<Command> {
+    let mut chosen = None;
+    egui::ComboBox::from_label("字幕轨")
+        .selected_text("选择")
+        .show_ui(ui, |ui| {
+            for tr in tracks {
+                if ui.selectable_label(false, &tr.label).clicked() {
+                    chosen = Some(Command::SelectSubtitleTrack(tr.stream_index));
+                }
+            }
+        });
+    chosen
+}

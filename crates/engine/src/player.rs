@@ -24,6 +24,7 @@ pub struct Player {
     // u64::MAX 表示无待处理 seek; 否则为目标毫秒, 音频线程消费后复位。
     audio_seek: Arc<AtomicU64>,
     subtitles: Option<subtitle::Subtitles>,
+    sub_tracks: Vec<media::SubtitleTrack>,
     loop_a: Option<u64>,
     loop_b: Option<u64>,
     prefs: persist::Preferences,
@@ -46,6 +47,7 @@ impl Player {
             audio_stop: Arc::new(AtomicBool::new(false)),
             audio_seek: Arc::new(AtomicU64::new(u64::MAX)),
             subtitles: None,
+            sub_tracks: Vec::new(),
             loop_a: None,
             loop_b: None,
             prefs: persist::Preferences::default(),
@@ -110,6 +112,11 @@ impl Player {
         if let Ok(s) = subtitle::load_file(path) {
             self.subtitles = Some(s);
         }
+    }
+
+    /// 当前文件内嵌的字幕轨道列表(供 UI 下拉)。
+    pub fn subtitle_tracks(&self) -> &[media::SubtitleTrack] {
+        &self.sub_tracks
     }
 
     fn handle_set_volume(&mut self, v: u8) {
@@ -197,6 +204,13 @@ impl Player {
                 self.playlist.set_cursor(i);
                 if let Some(p) = self.playlist.current().map(|p| p.to_path_buf()) {
                     self.open(&p);
+                }
+            }
+            Command::SelectSubtitleTrack(idx) => {
+                if let Some(path) = self.playlist.current().map(|p| p.to_path_buf()) {
+                    if let Ok(s) = media::decode_text_subtitle(&path, idx) {
+                        self.subtitles = Some(s);
+                    }
                 }
             }
         }
@@ -305,6 +319,7 @@ impl Player {
 
         self.video = Some(video);
         self.subtitles = sidecar_subtitle(path);
+        self.sub_tracks = media::list_subtitle_tracks(path).unwrap_or_default();
         let _ = self.machine.apply(player_core::Transition::Play);
 
         // 续播: 若该文件记录了有意义的进度(>3s), 打开后直接 seek 到该位置。
