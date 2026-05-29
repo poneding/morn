@@ -1,5 +1,6 @@
 mod app;
 mod controls;
+mod enhance;
 mod playlist_panel;
 mod subtitle_overlay;
 mod video_view;

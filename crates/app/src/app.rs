@@ -6,6 +6,7 @@ use engine::Player;
 pub struct PlayerApp {
     player: Player,
     video_view: VideoView,
+    rate_pct: u16,
 }
 
 impl PlayerApp {
@@ -13,6 +14,7 @@ impl PlayerApp {
         Self {
             player: Player::new(),
             video_view: VideoView::new(),
+            rate_pct: 100,
         }
     }
 }
@@ -36,11 +38,28 @@ impl eframe::App for PlayerApp {
             }
         }
 
+        self.player.tick();
+
         let t = self.player.timeline();
 
         egui::Panel::bottom("controls").show_inside(ui, |ui| {
             for cmd in controls::controls_bar(ui, &t) {
                 self.player.handle(cmd);
+            }
+            let actions = crate::enhance::enhance_bar(ui, self.rate_pct);
+            for cmd in actions.commands {
+                if let player_core::Command::SetRate(p) = cmd {
+                    self.rate_pct = p;
+                }
+                self.player.handle(cmd);
+            }
+            if actions.screenshot {
+                if let Some((rgba, w, h)) = self.video_view.last_frame() {
+                    match crate::enhance::save_screenshot(rgba, w, h) {
+                        Ok(p) => eprintln!("截图已保存: {}", p.display()),
+                        Err(e) => eprintln!("截图失败: {e}"),
+                    }
+                }
             }
         });
 

@@ -8,6 +8,7 @@ pub struct VideoView {
     texture: Option<VideoTexture>,
     tex_id: Option<egui::TextureId>,
     size: (u32, u32),
+    last_frame: Option<(Vec<u8>, u32, u32)>,
 }
 
 impl VideoView {
@@ -16,6 +17,7 @@ impl VideoView {
             texture: None,
             tex_id: None,
             size: (0, 0),
+            last_frame: None,
         }
     }
 
@@ -93,6 +95,14 @@ impl VideoView {
         if let Some(tex) = self.texture.as_mut() {
             tex.upload(queue, &vf.rgba);
         }
+        self.last_frame = Some((vf.rgba.clone(), vf.width, vf.height));
+    }
+
+    /// 返回最近一次显示的帧 (RGBA8, 宽, 高), 供截图使用。
+    pub fn last_frame(&self) -> Option<(&[u8], u32, u32)> {
+        self.last_frame
+            .as_ref()
+            .map(|(d, w, h)| (d.as_slice(), *w, *h))
     }
 }
 
