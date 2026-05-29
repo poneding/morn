@@ -5,3 +5,6 @@ pub use state::{InvalidTransition, PlaybackState, StateMachine, Transition};
 
 mod command;
 pub use command::Command;
+
+mod playlist;
+pub use playlist::Playlist;
