@@ -10,10 +10,10 @@ pub enum FrameDecision {
 }
 
 /// 给定主时钟位置 `master_ms` 与帧呈现时间 `frame_pts_ms`,
-/// 在容差 `tolerance_ms` 内判定该帧应如何处理。
-pub fn decide_frame(master_ms: u64, frame_pts_ms: u64, tolerance_ms: i64) -> FrameDecision {
+/// 在容差 `tolerance_ms`(毫秒, 非负窗口)内判定该帧应如何处理。
+pub fn decide_frame(master_ms: u64, frame_pts_ms: u64, tolerance_ms: u64) -> FrameDecision {
     let diff = frame_pts_ms as i64 - master_ms as i64; // 正: 帧在未来; 负: 帧已过去
-    if diff.abs() <= tolerance_ms {
+    if diff.unsigned_abs() <= tolerance_ms {
         FrameDecision::Display
     } else if diff < 0 {
         FrameDecision::Drop
@@ -27,7 +27,7 @@ mod tests {
     use super::*;
 
     // 容差 10ms: 帧 PTS 落在 [master-10, master+10] 内即认为应显示。
-    const TOL: i64 = 10;
+    const TOL: u64 = 10;
 
     #[test]
     fn frame_at_master_displays() {
@@ -51,5 +51,19 @@ mod tests {
         // 帧 PTS 远晚于主时钟 → 还没到显示时间, 等待。
         let d = decide_frame(1000, 1200, TOL);
         assert_eq!(d, FrameDecision::Wait { remaining_ms: 200 });
+    }
+
+    #[test]
+    fn frame_exactly_at_tolerance_edge_displays() {
+        // diff == +tol 和 diff == -tol 都在容差内(闭区间)。
+        assert_eq!(decide_frame(1000, 1010, TOL), FrameDecision::Display);
+        assert_eq!(decide_frame(1000, 990, TOL), FrameDecision::Display);
+    }
+
+    #[test]
+    fn frame_just_past_tolerance_transitions() {
+        // 刚越过容差: 未来 → Wait{完整差值}, 过去 → Drop。
+        assert_eq!(decide_frame(1000, 1011, TOL), FrameDecision::Wait { remaining_ms: 11 });
+        assert_eq!(decide_frame(1000, 989, TOL), FrameDecision::Drop);
     }
 }
