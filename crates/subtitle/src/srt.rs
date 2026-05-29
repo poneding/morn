@@ -10,7 +10,7 @@ pub fn parse_timestamp(s: &str) -> Option<u64> {
     if parts.next().is_some() {
         return None;
     }
-    let ms: u64 = millis.parse().ok()?;
+    let ms: u64 = millis.split_whitespace().next()?.parse().ok()?;
     Some(((h * 60 + m) * 60 + sec) * 1000 + ms)
 }
 
@@ -28,7 +28,7 @@ pub fn parse_srt(input: &str) -> Subtitles {
         // 第一行是序号, 跳过(容错: 即使缺失也尝试)。
         let first = lines.next();
         // 找到包含 "-->" 的时间行。
-        let time_line = if first.map(|l| l.contains("-->")).unwrap_or(false) {
+        let time_line = if first.is_some_and(|l| l.contains("-->")) {
             first
         } else {
             lines.next()
@@ -76,5 +76,31 @@ mod tests {
         let subs = parse_srt(input);
         assert_eq!(subs.len(), 1);
         assert_eq!(subs.text_at(3500), Some("Good"));
+    }
+
+    #[test]
+    fn block_without_sequence_number_is_parsed() {
+        // 缺序号: 第一行即时间行, 走 time_line = first 分支。
+        let input = "00:00:01,000 --> 00:00:02,000\nNoSeqNum\n";
+        let subs = parse_srt(input);
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs.text_at(1500), Some("NoSeqNum"));
+    }
+
+    #[test]
+    fn time_line_with_coordinates_still_parses() {
+        // 时间行带坐标扩展(合法 SRT), 不应丢弃该 cue。
+        let input = "1\n00:00:01,000 --> 00:00:02,000 X1:100 X2:200 Y1:50 Y2:80\nPositioned\n";
+        let subs = parse_srt(input);
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs.text_at(1500), Some("Positioned"));
+    }
+
+    #[test]
+    fn crlf_line_endings_are_normalized() {
+        let input = "1\r\n00:00:01,000 --> 00:00:02,000\r\nWindows\r\n";
+        let subs = parse_srt(input);
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs.text_at(1500), Some("Windows"));
     }
 }
