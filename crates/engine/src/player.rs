@@ -349,6 +349,9 @@ impl Player {
         self.duration_ms = 0;
         self.audio_stop = Arc::new(AtomicBool::new(false));
         self.audio_seek = Arc::new(AtomicU64::new(u64::MAX));
+        // AB 循环点属于单个文件; 切换/停止时清除, 避免 tick() 用旧文件的点误 seek。
+        self.loop_a = None;
+        self.loop_b = None;
     }
 }
 

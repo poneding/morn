@@ -38,11 +38,11 @@ pub fn decode_text_subtitle(
     use subtitle::Cue;
     ff::init()?;
     let mut ictx = ff::format::input(&path)?;
-    let params = ictx
+    let stream = ictx
         .stream(stream_index)
-        .ok_or(MediaError::NoStream("subtitle"))?
-        .parameters();
-    let time_base = f64::from(ictx.stream(stream_index).unwrap().time_base());
+        .ok_or(MediaError::NoStream("subtitle"))?;
+    let time_base = f64::from(stream.time_base());
+    let params = stream.parameters();
     let mut decoder = ff::codec::context::Context::from_parameters(params)?
         .decoder()
         .subtitle()?;
