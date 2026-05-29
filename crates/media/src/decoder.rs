@@ -38,8 +38,7 @@ impl VideoDecoder {
             .ok_or(MediaError::NoStream("video"))?;
         let stream_index = stream.index();
         let time_base = f64::from(stream.time_base());
-        let ctx = ff::codec::context::Context::from_parameters(stream.parameters())?;
-        let mut decoder = ctx.decoder().video()?;
+        let mut ctx = ff::codec::context::Context::from_parameters(stream.parameters())?;
 
         let mut is_hardware = false;
         let mut hw_device = None;
@@ -51,14 +50,15 @@ impl VideoDecoder {
                 let mut cb = Box::new(HwCallbackData {
                     hw_pix_fmt: dev.hw_pix_fmt,
                 });
-                // SAFETY: decoder.as_mut_ptr() 返回有效 *mut AVCodecContext。我们:
-                // (1) 把 opaque 指向 boxed HwCallbackData——该 box 存入 self._hw_cb_data,
-                //     在 decoder 存活期间不移动/释放, 故裸指针在回调期间有效;
+                // SAFETY: ctx.as_mut_ptr() 返回有效的未打开 *mut AVCodecContext。我们在 avcodec_open2
+                // (由下面的 .decoder().video() 触发) 之前设置硬件字段, 符合 FFmpeg 契约:
+                // (1) opaque 指向 boxed HwCallbackData——该 box 存入 self._hw_cb_data, 生命周期覆盖
+                //     decoder, 裸指针在 get_format 回调期间有效;
                 // (2) hw_device_ctx 用 av_buffer_ref 增引用(dev 的 Drop 释放其自身引用,
-                //     codec 关闭时释放此引用);
+                //     avcodec_free_context 释放此引用);
                 // (3) get_format 设为我们的 extern "C" 回调。
                 unsafe {
-                    let avctx = decoder.as_mut_ptr();
+                    let avctx = ctx.as_mut_ptr();
                     (*avctx).opaque = (cb.as_mut() as *mut HwCallbackData) as *mut std::ffi::c_void;
                     (*avctx).hw_device_ctx = sys::av_buffer_ref(dev.as_ptr());
                     (*avctx).get_format = Some(crate::hwaccel::get_hw_format);
@@ -70,6 +70,7 @@ impl VideoDecoder {
             }
         }
 
+        let decoder = ctx.decoder().video()?;
         let (width, height) = (decoder.width(), decoder.height());
 
         Ok(Self {
@@ -169,7 +170,7 @@ impl VideoDecoder {
         // transfer_hw_frame 内部调用 av_hwframe_transfer_data 下载到 sw(按需分配)。
         let ok = unsafe { crate::hwaccel::transfer_hw_frame(hw.as_ptr(), sw.as_mut_ptr()) };
         if !ok {
-            return Err(MediaError::NoStream("hw transfer failed"));
+            return Err(MediaError::HwTransfer);
         }
         let fmt = sw.format(); // SAFE accessor
         self.ensure_scaler(fmt)?;

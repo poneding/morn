@@ -6,4 +6,6 @@ pub enum MediaError {
     Ffmpeg(#[from] ffmpeg_next::Error),
     #[error("no {0} stream found")]
     NoStream(&'static str),
+    #[error("hardware frame transfer failed")]
+    HwTransfer,
 }

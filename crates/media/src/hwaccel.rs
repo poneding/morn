@@ -140,7 +140,7 @@ pub unsafe fn transfer_hw_frame(
     if ret < 0 {
         return false;
     }
-    // 拷贝 PTS 等元数据
+    // 拷贝 PTS 时间戳
     (*sw_frame).pts = (*hw_frame).pts;
     true
 }
