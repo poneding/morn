@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Preferences {
     pub volume: u8,
     pub window_size: (u32, u32),
@@ -32,17 +33,19 @@ impl Preferences {
     /// 从 JSON 文件加载。文件不存在时返回默认值(非错误)。
     pub fn load(path: &Path) -> std::io::Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(s) => Ok(serde_json::from_str(&s)
-                .unwrap_or_default()),
+            // 解析失败按默认处理: 偏好属低风险数据, 不阻断启动。
+            Ok(s) => Ok(serde_json::from_str(&s).unwrap_or_default()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e),
         }
     }
 
-    /// 序列化为 JSON 写入文件。
+    /// 序列化为 JSON 写入文件。自动创建父目录。
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 }
@@ -90,5 +93,15 @@ mod tests {
         let path = dir.path().join("nonexistent.json");
         let loaded = Preferences::load(&path).unwrap();
         assert_eq!(loaded.volume, 100);
+    }
+
+    #[test]
+    fn load_corrupt_json_returns_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("corrupt.json");
+        std::fs::write(&path, "{ not valid json").unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(loaded.volume, 100);
+        assert_eq!(loaded.window_size, (1280, 720));
     }
 }
