@@ -23,3 +23,9 @@ fn decodes_audio_to_f32_chunks() {
     let expected = dec.sample_rate() as usize;
     assert!(total_frames > expected * 9 / 10, "音频帧数 {total_frames} 偏少");
 }
+
+#[test]
+fn open_nonexistent_file_returns_err() {
+    let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/does_not_exist.mp4");
+    assert!(AudioDecoder::open(&missing).is_err());
+}

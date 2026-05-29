@@ -26,3 +26,9 @@ fn decodes_all_video_frames_to_rgba() {
     }
     assert!((23..=27).contains(&count), "解码帧数 {count} 不在预期范围");
 }
+
+#[test]
+fn open_nonexistent_file_returns_err() {
+    let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/does_not_exist.mp4");
+    assert!(VideoDecoder::open(&missing).is_err());
+}
