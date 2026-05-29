@@ -17,3 +17,4 @@ engine = { path = "../engine" }
 player-core = { path = "../player-core" }
 render = { path = "../render" }
 sync = { path = "../sync" }
+media = { path = "../media" }
