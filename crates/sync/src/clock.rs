@@ -18,7 +18,9 @@ pub fn decide_frame(master_ms: u64, frame_pts_ms: u64, tolerance_ms: u64) -> Fra
     } else if diff < 0 {
         FrameDecision::Drop
     } else {
-        FrameDecision::Wait { remaining_ms: diff as u64 }
+        FrameDecision::Wait {
+            remaining_ms: diff as u64,
+        }
     }
 }
 
@@ -63,7 +65,10 @@ mod tests {
     #[test]
     fn frame_just_past_tolerance_transitions() {
         // 刚越过容差: 未来 → Wait{完整差值}, 过去 → Drop。
-        assert_eq!(decide_frame(1000, 1011, TOL), FrameDecision::Wait { remaining_ms: 11 });
+        assert_eq!(
+            decide_frame(1000, 1011, TOL),
+            FrameDecision::Wait { remaining_ms: 11 }
+        );
         assert_eq!(decide_frame(1000, 989, TOL), FrameDecision::Drop);
     }
 }

@@ -7,7 +7,10 @@ pub struct Playlist {
 
 impl Playlist {
     pub fn new() -> Self {
-        Self { items: Vec::new(), cursor: 0 }
+        Self {
+            items: Vec::new(),
+            cursor: 0,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -57,7 +60,9 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn p(s: &str) -> PathBuf { PathBuf::from(s) }
+    fn p(s: &str) -> PathBuf {
+        PathBuf::from(s)
+    }
 
     #[test]
     fn empty_has_no_current() {

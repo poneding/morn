@@ -39,8 +39,16 @@ mod tests {
 
     fn sample() -> Subtitles {
         Subtitles::from_cues(vec![
-            Cue { start_ms: 1000, end_ms: 2000, text: "Hello".into() },
-            Cue { start_ms: 3000, end_ms: 4000, text: "World".into() },
+            Cue {
+                start_ms: 1000,
+                end_ms: 2000,
+                text: "Hello".into(),
+            },
+            Cue {
+                start_ms: 3000,
+                end_ms: 4000,
+                text: "World".into(),
+            },
         ])
     }
 
@@ -62,6 +70,6 @@ mod tests {
     fn boundaries_are_inclusive_start_exclusive_end() {
         let s = sample();
         assert_eq!(s.text_at(1000), Some("Hello")); // start inclusive
-        assert_eq!(s.text_at(2000), None);          // end exclusive
+        assert_eq!(s.text_at(2000), None); // end exclusive
     }
 }

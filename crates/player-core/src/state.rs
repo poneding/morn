@@ -24,7 +24,9 @@ pub struct StateMachine {
 
 impl StateMachine {
     pub fn new() -> Self {
-        Self { state: PlaybackState::Stopped }
+        Self {
+            state: PlaybackState::Stopped,
+        }
     }
 
     pub fn state(&self) -> PlaybackState {
@@ -82,7 +84,10 @@ mod tests {
         let mut m = StateMachine::new();
         assert_eq!(
             m.apply(Transition::Pause),
-            Err(InvalidTransition { from: PlaybackState::Stopped, transition: Transition::Pause })
+            Err(InvalidTransition {
+                from: PlaybackState::Stopped,
+                transition: Transition::Pause
+            })
         );
         assert_eq!(m.state(), PlaybackState::Stopped);
     }

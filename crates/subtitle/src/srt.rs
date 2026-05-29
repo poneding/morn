@@ -34,15 +34,23 @@ pub fn parse_srt(input: &str) -> Subtitles {
             lines.next()
         };
         let Some(time_line) = time_line else { continue };
-        let Some((start_s, end_s)) = time_line.split_once("-->") else { continue };
-        let (Some(start_ms), Some(end_ms)) =
-            (parse_timestamp(start_s), parse_timestamp(end_s)) else { continue };
+        let Some((start_s, end_s)) = time_line.split_once("-->") else {
+            continue;
+        };
+        let (Some(start_ms), Some(end_ms)) = (parse_timestamp(start_s), parse_timestamp(end_s))
+        else {
+            continue;
+        };
         let text: Vec<&str> = lines.collect();
         let text = text.join("\n");
         if text.is_empty() {
             continue;
         }
-        cues.push(Cue { start_ms, end_ms, text });
+        cues.push(Cue {
+            start_ms,
+            end_ms,
+            text,
+        });
     }
     cues.sort_by_key(|c| c.start_ms);
     Subtitles::from_cues(cues)
