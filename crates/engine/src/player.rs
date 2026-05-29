@@ -5,7 +5,7 @@ use media::AudioDecoder;
 use player_core::{Command, Playlist, StateMachine};
 use ringbuf::traits::Producer;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -21,6 +21,8 @@ pub struct Player {
     audio_out: Option<AudioHandle>,
     audio_join: Option<JoinHandle<()>>,
     audio_stop: Arc<AtomicBool>,
+    // u64::MAX 表示无待处理 seek; 否则为目标毫秒, 音频线程消费后复位。
+    audio_seek: Arc<AtomicU64>,
 }
 
 impl Player {
@@ -35,6 +37,7 @@ impl Player {
             audio_out: None,
             audio_join: None,
             audio_stop: Arc::new(AtomicBool::new(false)),
+            audio_seek: Arc::new(AtomicU64::new(u64::MAX)),
         }
     }
 
@@ -88,7 +91,17 @@ impl Player {
                 self.volume = v.min(100);
                 self.volume_shared.store(v.min(100), Ordering::Relaxed);
             }
-            Command::SeekTo(_ms) => {}
+            Command::SeekTo(ms) => {
+                if let Some(v) = &self.video {
+                    v.request_seek(ms);
+                    // 排空已缓冲的旧帧(尤其向后 seek 时, 旧帧 PTS 在目标之后不会被 decide_frame 丢弃)
+                    while v.try_recv_frame().is_some() {}
+                }
+                self.audio_seek.store(ms, Ordering::Relaxed);
+                if let Some(a) = &self.audio_out {
+                    a.clock.reset_to(ms);
+                }
+            }
             Command::SetRate(_) | Command::Next | Command::Prev => {}
         }
     }
@@ -112,12 +125,20 @@ impl Player {
                 let stop = Arc::new(AtomicBool::new(false));
                 let stop_t = stop.clone();
                 let vol_shared = self.volume_shared.clone();
+                let seek_t = self.audio_seek.clone();
                 let join = std::thread::spawn(move || {
                     let mut adec = match AudioDecoder::open(&apath) {
                         Ok(d) => d,
                         Err(_) => return,
                     };
                     'outer: while !stop_t.load(Ordering::Relaxed) {
+                        // 消费待处理 seek; swap 保证仅触发一次。
+                        // 已知局限: cpal ringbuf 中约 1s 旧样本会在新位置音频追上前短暂续播,
+                        // 精确清空 ringbuf 推迟到后续任务。
+                        let st = seek_t.swap(u64::MAX, Ordering::Relaxed);
+                        if st != u64::MAX {
+                            let _ = adec.seek_ms(st);
+                        }
                         match adec.next_chunk() {
                             Ok(Some(chunk)) => {
                                 let mut buf = chunk.samples;
@@ -163,6 +184,7 @@ impl Player {
         }
         self.duration_ms = 0;
         self.audio_stop = Arc::new(AtomicBool::new(false));
+        self.audio_seek = Arc::new(AtomicU64::new(u64::MAX));
     }
 }
 

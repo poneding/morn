@@ -107,6 +107,15 @@ impl VideoDecoder {
         self.height
     }
 
+    /// seek 到目标毫秒(跳到不晚于该时间的最近关键帧), 并清解码器内部缓冲。
+    pub fn seek_ms(&mut self, ms: u64) -> Result<(), MediaError> {
+        let ts = ms as i64 * 1000; // Input::seek 用 AV_TIME_BASE 微秒
+        self.ictx.seek(ts, ..ts)?;
+        self.decoder.flush();
+        self.eof = false;
+        Ok(())
+    }
+
     /// 返回下一帧 RGBA, 文件结束返回 Ok(None)。
     pub fn next_frame(&mut self) -> Result<Option<VideoFrame>, MediaError> {
         loop {

@@ -17,6 +17,7 @@ pub enum FramePull {
 
 pub struct DecodeThread {
     rx: Receiver<VideoFrame>,
+    seek_tx: Sender<u64>,
     stop: Arc<AtomicBool>,
     hw_active: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
@@ -28,6 +29,7 @@ impl DecodeThread {
         drop(VideoDecoder::open(path)?); // 在调用线程先验证可打开
         let owned_path = path.to_path_buf(); // VideoDecoder !Send, 移动路径而非解码器
         let (tx, rx): (Sender<VideoFrame>, Receiver<VideoFrame>) = bounded(queue_cap);
+        let (seek_tx, seek_rx) = crossbeam_channel::unbounded::<u64>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let hw_active = Arc::new(AtomicBool::new(false));
@@ -40,6 +42,14 @@ impl DecodeThread {
                 Err(_) => return,
             };
             while !stop_thread.load(Ordering::Relaxed) {
+                // 排空所有待处理 seek 请求, 只保留最后一个并应用一次。
+                let mut pending = None;
+                while let Ok(t) = seek_rx.try_recv() {
+                    pending = Some(t);
+                }
+                if let Some(t) = pending {
+                    let _ = decoder.seek_ms(t);
+                }
                 match decoder.next_frame() {
                     Ok(Some(frame)) => {
                         hw_active_t.store(decoder.observed_hardware(), Ordering::Relaxed);
@@ -55,6 +65,7 @@ impl DecodeThread {
 
         Ok(Self {
             rx,
+            seek_tx,
             stop,
             hw_active,
             join: Some(join),
@@ -72,6 +83,11 @@ impl DecodeThread {
     /// 非阻塞取帧; 无帧返回 None。UI 线程用这个避免卡顿。
     pub fn try_recv_frame(&self) -> Option<VideoFrame> {
         self.rx.try_recv().ok()
+    }
+
+    /// 请求 seek 到目标毫秒, 由解码线程在下一轮循环开头应用。
+    pub fn request_seek(&self, ms: u64) {
+        let _ = self.seek_tx.send(ms);
     }
 
     /// 当前是否实际硬件解码(由解码线程按帧更新)。
