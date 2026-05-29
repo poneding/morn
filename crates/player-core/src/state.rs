@@ -80,8 +80,19 @@ mod tests {
     #[test]
     fn pause_from_stopped_is_error() {
         let mut m = StateMachine::new();
-        assert!(m.apply(Transition::Pause).is_err());
+        assert_eq!(
+            m.apply(Transition::Pause),
+            Err(InvalidTransition { from: PlaybackState::Stopped, transition: Transition::Pause })
+        );
         assert_eq!(m.state(), PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn play_from_paused_resumes() {
+        let mut m = StateMachine::new();
+        m.apply(Transition::Play).unwrap();
+        m.apply(Transition::Pause).unwrap();
+        assert_eq!(m.apply(Transition::Play).unwrap(), PlaybackState::Playing);
     }
 
     #[test]
