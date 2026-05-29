@@ -5,7 +5,7 @@ use media::AudioDecoder;
 use player_core::{Command, Playlist, StateMachine};
 use ringbuf::traits::Producer;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -15,6 +15,7 @@ pub struct Player {
     #[allow(dead_code)]
     playlist: Playlist,
     volume: u8,
+    volume_shared: Arc<AtomicU8>,
     duration_ms: u64,
     video: Option<DecodeThread>,
     audio_out: Option<AudioHandle>,
@@ -28,6 +29,7 @@ impl Player {
             machine: StateMachine::new(),
             playlist: Playlist::new(),
             volume: 100,
+            volume_shared: Arc::new(AtomicU8::new(100)),
             duration_ms: 0,
             video: None,
             audio_out: None,
@@ -64,18 +66,28 @@ impl Player {
         match cmd {
             Command::Open(path) => self.open(&path),
             Command::Play => {
-                if self.video.is_some() {
-                    let _ = self.machine.apply(player_core::Transition::Play);
+                if self.video.is_some() && self.machine.apply(player_core::Transition::Play).is_ok()
+                {
+                    if let Some(a) = &self.audio_out {
+                        a.resume();
+                    }
                 }
             }
             Command::Pause => {
-                let _ = self.machine.apply(player_core::Transition::Pause);
+                if self.machine.apply(player_core::Transition::Pause).is_ok() {
+                    if let Some(a) = &self.audio_out {
+                        a.pause();
+                    }
+                }
             }
             Command::Stop => {
                 let _ = self.machine.apply(player_core::Transition::Stop);
                 self.teardown();
             }
-            Command::SetVolume(v) => self.volume = v.min(100),
+            Command::SetVolume(v) => {
+                self.volume = v.min(100);
+                self.volume_shared.store(v.min(100), Ordering::Relaxed);
+            }
             Command::SeekTo(_ms) => {}
             Command::SetRate(_) | Command::Next | Command::Prev => {}
         }
@@ -99,6 +111,7 @@ impl Player {
                 let apath = path.to_path_buf();
                 let stop = Arc::new(AtomicBool::new(false));
                 let stop_t = stop.clone();
+                let vol_shared = self.volume_shared.clone();
                 let join = std::thread::spawn(move || {
                     let mut adec = match AudioDecoder::open(&apath) {
                         Ok(d) => d,
@@ -107,12 +120,14 @@ impl Player {
                     'outer: while !stop_t.load(Ordering::Relaxed) {
                         match adec.next_chunk() {
                             Ok(Some(chunk)) => {
+                                let mut buf = chunk.samples;
+                                audio::apply_gain(&mut buf, vol_shared.load(Ordering::Relaxed));
                                 let mut i = 0;
-                                while i < chunk.samples.len() {
+                                while i < buf.len() {
                                     if stop_t.load(Ordering::Relaxed) {
                                         break 'outer;
                                     }
-                                    if producer.try_push(chunk.samples[i]).is_ok() {
+                                    if producer.try_push(buf[i]).is_ok() {
                                         i += 1;
                                     } else {
                                         std::thread::sleep(std::time::Duration::from_millis(2));
