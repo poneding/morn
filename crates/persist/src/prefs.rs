@@ -11,6 +11,9 @@ pub struct Preferences {
     pub seek_step_secs: u64,
     pub theme: String,
     pub subtitle_font_size: f32,
+    pub last_playlist: Vec<String>,
+    pub last_index: usize,
+    pub history: Vec<String>,
     /// 文件路径(字符串) → 续播位置(毫秒)。
     resume_points: HashMap<String, u64>,
 }
@@ -24,6 +27,9 @@ impl Default for Preferences {
             seek_step_secs: 10,
             theme: "system".to_string(),
             subtitle_font_size: 24.0,
+            last_playlist: Vec::new(),
+            last_index: 0,
+            history: Vec::new(),
             resume_points: HashMap::new(),
         }
     }
@@ -138,5 +144,35 @@ mod tests {
         assert_eq!(p.seek_step_secs, 10);
         assert_eq!(p.theme, "system");
         assert_eq!(p.subtitle_font_size, 24.0);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn playlist_history_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.json");
+        let mut p = Preferences::default();
+        p.last_playlist = vec!["/a.mp4".into(), "/b.mp4".into()];
+        p.last_index = 1;
+        p.history = vec!["/b.mp4".into(), "/a.mp4".into()];
+        p.save(&path).unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(
+            loaded.last_playlist,
+            vec!["/a.mp4".to_string(), "/b.mp4".to_string()]
+        );
+        assert_eq!(loaded.last_index, 1);
+        assert_eq!(
+            loaded.history,
+            vec!["/b.mp4".to_string(), "/a.mp4".to_string()]
+        );
+    }
+
+    #[test]
+    fn playlist_history_defaults_empty() {
+        let p = Preferences::default();
+        assert!(p.last_playlist.is_empty());
+        assert_eq!(p.last_index, 0);
+        assert!(p.history.is_empty());
     }
 }
