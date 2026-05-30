@@ -7,6 +7,8 @@ mod shortcuts;
 mod subtitle_overlay;
 mod video_view;
 
+rust_i18n::i18n!("locales", fallback = "en");
+
 use app::PlayerApp;
 
 fn main() -> eframe::Result {

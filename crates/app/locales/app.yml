@@ -1,0 +1,125 @@
+_version: 2
+open_file:
+  en: Open
+  zh-CN: 打开文件
+  zh-TW: 開啟檔案
+play:
+  en: Play
+  zh-CN: 播放
+  zh-TW: 播放
+pause:
+  en: Pause
+  zh-CN: 暂停
+  zh-TW: 暫停
+stop:
+  en: Stop
+  zh-CN: 停止
+  zh-TW: 停止
+mute_toggle:
+  en: Mute
+  zh-CN: 静音切换
+  zh-TW: 靜音切換
+fullscreen:
+  en: Fullscreen
+  zh-CN: 全屏
+  zh-TW: 全螢幕
+subtitle_track:
+  en: Subtitle Track
+  zh-CN: 字幕轨
+  zh-TW: 字幕軌
+select:
+  en: Select
+  zh-CN: 选择
+  zh-TW: 選擇
+playlist:
+  en: Playlist
+  zh-CN: 播放列表
+  zh-TW: 播放清單
+prev:
+  en: Previous
+  zh-CN: 上一个
+  zh-TW: 上一個
+next:
+  en: Next
+  zh-CN: 下一个
+  zh-TW: 下一個
+rate:
+  en: Speed
+  zh-CN: 倍速
+  zh-TW: 倍速
+step_frame:
+  en: Step Frame (when paused)
+  zh-CN: 逐帧(暂停时)
+  zh-TW: 逐幀(暫停時)
+loop_a:
+  en: Set Loop Start
+  zh-CN: 设循环起点
+  zh-TW: 設迴圈起點
+loop_b:
+  en: Set Loop End
+  zh-CN: 设循环终点
+  zh-TW: 設迴圈終點
+clear_loop:
+  en: Clear AB Loop
+  zh-CN: 清除 AB 循环
+  zh-TW: 清除 AB 迴圈
+screenshot:
+  en: Screenshot
+  zh-CN: 截图
+  zh-TW: 截圖
+drop_hint:
+  en: Drop a video file to start
+  zh-CN: 拖入视频文件开始播放
+  zh-TW: 拖入影片檔開始播放
+video_filter:
+  en: Video
+  zh-CN: 视频
+  zh-TW: 影片
+settings:
+  en: Settings
+  zh-CN: 设置
+  zh-TW: 設定
+appearance:
+  en: Appearance
+  zh-CN: 外观
+  zh-TW: 外觀
+language:
+  en: Language
+  zh-CN: 语言
+  zh-TW: 語言
+theme:
+  en: Theme
+  zh-CN: 主题
+  zh-TW: 主題
+theme_dark:
+  en: Dark
+  zh-CN: 深色
+  zh-TW: 深色
+theme_light:
+  en: Light
+  zh-CN: 浅色
+  zh-TW: 淺色
+theme_system:
+  en: Follow System
+  zh-CN: 跟随系统
+  zh-TW: 跟隨系統
+playback:
+  en: Playback
+  zh-CN: 播放
+  zh-TW: 播放
+seek_step:
+  en: Seek Step
+  zh-CN: 快进步长
+  zh-TW: 快進步長
+subtitle:
+  en: Subtitle
+  zh-CN: 字幕
+  zh-TW: 字幕
+subtitle_size:
+  en: Subtitle Size
+  zh-CN: 字幕字号
+  zh-TW: 字幕字號
+seconds:
+  en: s
+  zh-CN: 秒
+  zh-TW: 秒
