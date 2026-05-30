@@ -7,6 +7,10 @@ use std::path::Path;
 pub struct Preferences {
     pub volume: u8,
     pub window_size: (u32, u32),
+    pub language: String,
+    pub seek_step_secs: u64,
+    pub theme: String,
+    pub subtitle_font_size: f32,
     /// 文件路径(字符串) → 续播位置(毫秒)。
     resume_points: HashMap<String, u64>,
 }
@@ -16,6 +20,10 @@ impl Default for Preferences {
         Self {
             volume: 100,
             window_size: (1280, 720),
+            language: "zh-CN".to_string(),
+            seek_step_secs: 10,
+            theme: "system".to_string(),
+            subtitle_font_size: 24.0,
             resume_points: HashMap::new(),
         }
     }
@@ -103,5 +111,32 @@ mod tests {
         let loaded = Preferences::load(&path).unwrap();
         assert_eq!(loaded.volume, 100);
         assert_eq!(loaded.window_size, (1280, 720));
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn new_settings_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.json");
+        let mut p = Preferences::default();
+        p.language = "zh-TW".into();
+        p.seek_step_secs = 20;
+        p.theme = "dark".into();
+        p.subtitle_font_size = 30.0;
+        p.save(&path).unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(loaded.language, "zh-TW");
+        assert_eq!(loaded.seek_step_secs, 20);
+        assert_eq!(loaded.theme, "dark");
+        assert_eq!(loaded.subtitle_font_size, 30.0);
+    }
+
+    #[test]
+    fn settings_defaults() {
+        let p = Preferences::default();
+        assert_eq!(p.language, "zh-CN");
+        assert_eq!(p.seek_step_secs, 10);
+        assert_eq!(p.theme, "system");
+        assert_eq!(p.subtitle_font_size, 24.0);
     }
 }
