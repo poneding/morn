@@ -66,6 +66,22 @@ impl Player {
         p
     }
 
+    pub fn prefs(&self) -> &persist::Preferences {
+        &self.prefs
+    }
+    pub fn set_language(&mut self, v: &str) {
+        self.prefs.language = v.to_string();
+    }
+    pub fn set_seek_step(&mut self, secs: u64) {
+        self.prefs.seek_step_secs = secs;
+    }
+    pub fn set_theme(&mut self, v: &str) {
+        self.prefs.theme = v.to_string();
+    }
+    pub fn set_subtitle_font_size(&mut self, size: f32) {
+        self.prefs.subtitle_font_size = size;
+    }
+
     pub fn timeline(&self) -> Timeline {
         let position_ms = self
             .audio_out
@@ -410,5 +426,18 @@ mod tests {
         let mut p = Player::new();
         p.handle(Command::Play);
         assert_eq!(p.timeline().state, PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn setters_update_prefs() {
+        let mut p = Player::new();
+        p.set_seek_step(20);
+        p.set_language("en");
+        p.set_theme("dark");
+        p.set_subtitle_font_size(32.0);
+        assert_eq!(p.prefs().seek_step_secs, 20);
+        assert_eq!(p.prefs().language, "en");
+        assert_eq!(p.prefs().theme, "dark");
+        assert_eq!(p.prefs().subtitle_font_size, 32.0);
     }
 }
