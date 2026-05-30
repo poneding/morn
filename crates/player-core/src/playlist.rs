@@ -47,6 +47,16 @@ impl Playlist {
         }
     }
 
+    /// 用新条目替换整个列表, cursor 收敛到 [0, len)。
+    pub fn set_items(&mut self, items: Vec<std::path::PathBuf>, cursor: usize) {
+        self.cursor = if items.is_empty() {
+            0
+        } else {
+            cursor.min(items.len() - 1)
+        };
+        self.items = items;
+    }
+
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<&PathBuf> {
         if self.cursor + 1 < self.items.len() {
@@ -139,5 +149,16 @@ mod tests {
         // 越界索引被忽略, 游标保持不变。
         pl.set_cursor(9);
         assert_eq!(pl.current_index(), Some(2));
+    }
+
+    #[test]
+    fn set_items_replaces_and_sets_cursor() {
+        let mut pl = Playlist::new();
+        pl.add(p("/old.mp4"));
+        pl.set_items(vec![p("/a.mp4"), p("/b.mp4"), p("/c.mp4")], 2);
+        assert_eq!(pl.len(), 3);
+        assert_eq!(pl.current(), Some(&p("/c.mp4")));
+        pl.set_items(vec![p("/x.mp4")], 99); // 越界收敛末尾
+        assert_eq!(pl.current(), Some(&p("/x.mp4")));
     }
 }

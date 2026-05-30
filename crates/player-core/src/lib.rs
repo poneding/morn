@@ -8,3 +8,6 @@ pub use command::Command;
 
 mod playlist;
 pub use playlist::Playlist;
+
+mod history;
+pub use history::push_history;
