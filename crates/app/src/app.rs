@@ -25,9 +25,21 @@ fn prefs_path() -> std::path::PathBuf {
     std::env::temp_dir().join("morn-prefs.json")
 }
 
+fn theme_preference(s: &str) -> egui::ThemePreference {
+    match s {
+        "dark" => egui::ThemePreference::Dark,
+        "light" => egui::ThemePreference::Light,
+        _ => egui::ThemePreference::System,
+    }
+}
+
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+
+        // 每帧应用语言与主题偏好(幂等), 保证设置窗口切换后立即生效。
+        rust_i18n::set_locale(&self.player.prefs().language);
+        ctx.set_theme(theme_preference(&self.player.prefs().theme));
 
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for f in dropped {
