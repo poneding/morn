@@ -2,6 +2,7 @@ use crate::controls;
 use crate::video_view::VideoView;
 use eframe::egui;
 use engine::Player;
+use rust_i18n::t;
 
 pub struct PlayerApp {
     player: Player,
@@ -51,7 +52,10 @@ impl eframe::App for PlayerApp {
             for cmd in controls::controls_bar(ui, &t) {
                 if let player_core::Command::OpenDialog = cmd {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("视频", &["mp4", "mkv", "webm", "mov", "avi"])
+                        .add_filter(
+                            t!("video_filter").to_string(),
+                            &["mp4", "mkv", "webm", "mov", "avi"],
+                        )
                         .pick_file()
                     {
                         self.player.handle(player_core::Command::Open(path));

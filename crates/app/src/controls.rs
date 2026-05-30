@@ -1,6 +1,7 @@
 use eframe::egui;
 use engine::Timeline;
 use player_core::Command;
+use rust_i18n::t;
 
 /// 在底部面板绘制控制栏, 返回本帧产生的命令(若有)。
 pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
@@ -8,7 +9,11 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
     let mut cmds = Vec::new();
 
     ui.horizontal(|ui| {
-        if ui.button("📂").on_hover_text("打开文件").clicked() {
+        if ui
+            .button("📂")
+            .on_hover_text(t!("open_file").to_string())
+            .clicked()
+        {
             cmds.push(Command::OpenDialog);
         }
         let playing = t.state == PlaybackState::Playing;
@@ -47,7 +52,11 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
         }
 
         let mute_icon = if t.muted { "🔇" } else { "🔊" };
-        if ui.button(mute_icon).on_hover_text("静音切换").clicked() {
+        if ui
+            .button(mute_icon)
+            .on_hover_text(t!("mute_toggle").to_string())
+            .clicked()
+        {
             cmds.push(Command::ToggleMute);
         }
 
@@ -66,8 +75,8 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
 /// 字幕轨道下拉; 选中某轨返回 SelectSubtitleTrack(stream_index)。
 pub fn subtitle_track_combo(ui: &mut egui::Ui, tracks: &[media::SubtitleTrack]) -> Option<Command> {
     let mut chosen = None;
-    egui::ComboBox::from_label("字幕轨")
-        .selected_text("选择")
+    egui::ComboBox::from_label(t!("subtitle_track").to_string())
+        .selected_text(t!("select").to_string())
         .show_ui(ui, |ui| {
             for tr in tracks {
                 if ui.selectable_label(false, &tr.label).clicked() {

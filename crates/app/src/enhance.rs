@@ -1,5 +1,6 @@
 use eframe::egui;
 use player_core::Command;
+use rust_i18n::t;
 use std::path::PathBuf;
 
 /// 增强控件本帧产生的动作。
@@ -15,7 +16,7 @@ pub fn enhance_bar(ui: &mut egui::Ui, rate_pct: u16) -> EnhanceActions {
     let mut screenshot = false;
     ui.horizontal(|ui| {
         let mut rate = rate_pct;
-        egui::ComboBox::from_label("倍速")
+        egui::ComboBox::from_label(t!("rate").to_string())
             .selected_text(format!("{:.2}x", rate as f32 / 100.0))
             .show_ui(ui, |ui| {
                 for pct in [50u16, 100, 150, 200] {
@@ -25,19 +26,39 @@ pub fn enhance_bar(ui: &mut egui::Ui, rate_pct: u16) -> EnhanceActions {
         if rate != rate_pct {
             commands.push(Command::SetRate(rate));
         }
-        if ui.button("⏭|").on_hover_text("逐帧(暂停时)").clicked() {
+        if ui
+            .button("⏭|")
+            .on_hover_text(t!("step_frame").to_string())
+            .clicked()
+        {
             commands.push(Command::StepFrame);
         }
-        if ui.button("Ⓐ").on_hover_text("设循环起点").clicked() {
+        if ui
+            .button("Ⓐ")
+            .on_hover_text(t!("loop_a").to_string())
+            .clicked()
+        {
             commands.push(Command::SetLoopA);
         }
-        if ui.button("Ⓑ").on_hover_text("设循环终点").clicked() {
+        if ui
+            .button("Ⓑ")
+            .on_hover_text(t!("loop_b").to_string())
+            .clicked()
+        {
             commands.push(Command::SetLoopB);
         }
-        if ui.button("✖").on_hover_text("清除 AB 循环").clicked() {
+        if ui
+            .button("✖")
+            .on_hover_text(t!("clear_loop").to_string())
+            .clicked()
+        {
             commands.push(Command::ClearLoop);
         }
-        if ui.button("📷").on_hover_text("截图").clicked() {
+        if ui
+            .button("📷")
+            .on_hover_text(t!("screenshot").to_string())
+            .clicked()
+        {
             screenshot = true;
         }
     });

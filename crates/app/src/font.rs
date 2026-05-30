@@ -17,7 +17,11 @@ pub fn install_cjk_font(ctx: &egui::Context) {
         .font_data
         .insert("cjk".to_owned(), egui::FontData::from_owned(bytes).into());
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().push("cjk".to_owned());
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("cjk".to_owned());
     }
     ctx.set_fonts(fonts);
 }

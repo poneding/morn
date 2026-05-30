@@ -1,6 +1,7 @@
 use eframe::egui;
 use engine::Player;
 use render::VideoTexture;
+use rust_i18n::t;
 use sync::{decide_frame, FrameDecision};
 
 /// 持有 wgpu 纹理与其在 egui 中的注册 id。
@@ -58,7 +59,7 @@ impl VideoView {
             }
         } else {
             ui.centered_and_justified(|ui| {
-                ui.label("拖入视频文件开始播放");
+                ui.label(t!("drop_hint").to_string());
             });
         }
 
