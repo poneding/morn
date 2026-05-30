@@ -48,7 +48,10 @@ fn load_first(candidates: &[&str]) -> Option<(String, Vec<u8>)> {
 // 各平台候选字体路径(按优先级)。.ttc 集合按 index 0 加载。
 
 #[cfg(target_os = "macos")]
-const UI_FONTS: &[&str] = &["/System/Library/Fonts/SFNS.ttf"]; // SF Pro
+const UI_FONTS: &[&str] = &[
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+    "/System/Library/Fonts/Helvetica.ttc",
+]; // SF Pro 是可变字体 egui 渲染不了, 用 HelveticaNeue
 #[cfg(target_os = "macos")]
 const CJK_FONTS: &[&str] = &[
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
