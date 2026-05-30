@@ -8,6 +8,7 @@ pub struct PlayerApp {
     player: Player,
     video_view: VideoView,
     rate_pct: u16,
+    show_settings: bool,
 }
 
 impl PlayerApp {
@@ -17,6 +18,7 @@ impl PlayerApp {
             player: Player::with_prefs(prefs_path()),
             video_view: VideoView::new(),
             rate_pct: 100,
+            show_settings: false,
         }
     }
 }
@@ -97,6 +99,13 @@ impl eframe::App for PlayerApp {
                     self.player.handle(cmd);
                 }
             }
+            if ui
+                .button("⚙")
+                .on_hover_text(t!("settings").to_string())
+                .clicked()
+            {
+                self.show_settings = !self.show_settings;
+            }
         });
 
         egui::Panel::left("playlist")
@@ -112,6 +121,8 @@ impl eframe::App for PlayerApp {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             self.video_view.show(ui, frame, &self.player);
         });
+
+        crate::settings::settings_window(&ctx, &mut self.show_settings, &mut self.player);
 
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
