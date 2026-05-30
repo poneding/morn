@@ -63,6 +63,13 @@ impl Player {
         p.volume_shared.store(prefs.volume, Ordering::Relaxed);
         p.prefs = prefs;
         p.prefs_path = prefs_path;
+        // 恢复上次的播放列表与选中项(不自动开播, 仅恢复列表+选择)。
+        if !p.prefs.last_playlist.is_empty() {
+            let items: Vec<std::path::PathBuf> =
+                p.prefs.last_playlist.iter().map(Into::into).collect();
+            let idx = p.prefs.last_index;
+            p.playlist.set_items(items, idx);
+        }
         p
     }
 
@@ -115,6 +122,19 @@ impl Player {
         self.playlist.current_index()
     }
 
+    /// 打开目录: 把目录内所有视频(排序后)作为播放列表, 从第一个开始播。
+    pub fn open_folder(&mut self, dir: &Path) {
+        let items = dir_videos(dir);
+        if let Some(first) = items.first().cloned() {
+            self.playlist.set_items(items, 0);
+            self.open(&first);
+        }
+    }
+
+    pub fn history(&self) -> &[String] {
+        &self.prefs.history
+    }
+
     pub fn current_subtitle(&self) -> Option<String> {
         let pos = self.timeline().position_ms;
         self.subtitles
@@ -143,10 +163,9 @@ impl Player {
     pub fn handle(&mut self, cmd: Command) {
         match cmd {
             Command::Open(path) => {
-                self.playlist.add(path.clone());
-                // 新打开的文件成为当前项(add 不移动游标, 故显式定位), UI 高亮才正确。
-                self.playlist
-                    .set_cursor(self.playlist.len().saturating_sub(1));
+                let items = sibling_videos(&path);
+                let idx = items.iter().position(|p| *p == path).unwrap_or(0);
+                self.playlist.set_items(items, idx);
                 self.open(&path);
             }
             Command::Play => {
@@ -183,6 +202,7 @@ impl Player {
                 }
             }
             Command::OpenDialog => {}
+            Command::OpenFolder => {}
             Command::SeekTo(ms) => {
                 if let Some(v) = &self.video {
                     v.request_seek(ms);
@@ -267,6 +287,12 @@ impl Player {
             }
         }
         self.prefs.volume = self.volume;
+        self.prefs.last_playlist = self
+            .playlist
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        self.prefs.last_index = self.playlist.current_index().unwrap_or(0);
         let _ = self.prefs.save(&self.prefs_path);
     }
 
@@ -334,6 +360,8 @@ impl Player {
         }
 
         self.video = Some(video);
+        let history_key = path.to_string_lossy().to_string();
+        player_core::push_history(&mut self.prefs.history, &history_key, 50);
         self.subtitles = sidecar_subtitle(path);
         self.sub_tracks = media::list_subtitle_tracks(path).unwrap_or_default();
         let _ = self.machine.apply(player_core::Transition::Play);
@@ -389,6 +417,46 @@ fn sidecar_subtitle(video: &Path) -> Option<subtitle::Subtitles> {
     None
 }
 
+const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "m4v", "flv", "ts"];
+
+fn is_video_ext(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| VIDEO_EXTS.contains(&e.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// `video` 所在目录下所有视频(按文件名排序)。读失败/空则返回 [video]。
+fn sibling_videos(video: &Path) -> Vec<std::path::PathBuf> {
+    let Some(dir) = video.parent() else {
+        return vec![video.to_path_buf()];
+    };
+    let mut out: Vec<_> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_video_ext(p))
+        .collect();
+    if out.is_empty() {
+        return vec![video.to_path_buf()];
+    }
+    out.sort();
+    out
+}
+
+fn dir_videos(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out: Vec<_> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_video_ext(p))
+        .collect();
+    out.sort();
+    out
+}
+
 fn probe_duration_ms(path: &Path) -> Option<u64> {
     use ffmpeg_next as ff;
     ff::init().ok()?;
@@ -439,5 +507,30 @@ mod tests {
         assert_eq!(p.prefs().language, "en");
         assert_eq!(p.prefs().theme, "dark");
         assert_eq!(p.prefs().subtitle_font_size, 32.0);
+    }
+
+    #[test]
+    fn is_video_ext_filters() {
+        assert!(super::is_video_ext(std::path::Path::new("/x/a.mp4")));
+        assert!(super::is_video_ext(std::path::Path::new("/x/a.MKV")));
+        assert!(!super::is_video_ext(std::path::Path::new("/x/a.txt")));
+        assert!(!super::is_video_ext(std::path::Path::new("/x/a")));
+    }
+
+    #[test]
+    fn sibling_videos_lists_sorted() {
+        let dir = std::env::temp_dir().join(format!("morn_sib_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["b.mp4", "a.mp4", "note.txt", "c.mkv"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        let target = dir.join("a.mp4");
+        let got = super::sibling_videos(&target);
+        let names: Vec<_> = got
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["a.mp4", "b.mp4", "c.mkv"]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
