@@ -13,7 +13,7 @@ pub struct PlayerApp {
 
 impl PlayerApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        crate::font::install_cjk_font(&cc.egui_ctx);
+        crate::font::install_fonts(&cc.egui_ctx);
         Self {
             player: Player::with_prefs(prefs_path()),
             video_view: VideoView::new(),
