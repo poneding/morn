@@ -4,11 +4,18 @@ use eframe::egui;
 use engine::Player;
 use rust_i18n::t;
 
+#[derive(PartialEq)]
+enum SidebarTab {
+    Playlist,
+    History,
+}
+
 pub struct PlayerApp {
     player: Player,
     video_view: VideoView,
     rate_pct: u16,
     show_settings: bool,
+    sidebar_tab: SidebarTab,
 }
 
 impl PlayerApp {
@@ -19,6 +26,7 @@ impl PlayerApp {
             video_view: VideoView::new(),
             rate_pct: 100,
             show_settings: false,
+            sidebar_tab: SidebarTab::Playlist,
         }
     }
 }
@@ -164,10 +172,34 @@ impl eframe::App for PlayerApp {
         egui::Panel::left("playlist")
             .default_size(200.0)
             .show_inside(ui, |ui| {
-                let paths = self.player.playlist_paths();
-                let cur = self.player.current_index();
-                for cmd in crate::playlist_panel::playlist_panel(ui, &paths, cur) {
-                    self.player.handle(cmd);
+                ui.horizontal(|ui| {
+                    ui.selectable_value(
+                        &mut self.sidebar_tab,
+                        SidebarTab::Playlist,
+                        t!("playlist").to_string(),
+                    );
+                    ui.selectable_value(
+                        &mut self.sidebar_tab,
+                        SidebarTab::History,
+                        t!("history").to_string(),
+                    );
+                });
+                ui.separator();
+                match self.sidebar_tab {
+                    SidebarTab::Playlist => {
+                        let paths = self.player.playlist_paths();
+                        let cur = self.player.current_index();
+                        for cmd in crate::playlist_panel::playlist_panel(ui, &paths, cur) {
+                            self.player.handle(cmd);
+                        }
+                    }
+                    SidebarTab::History => {
+                        let hist: Vec<std::path::PathBuf> =
+                            self.player.history().iter().map(Into::into).collect();
+                        if let Some(cmd) = crate::playlist_panel::history_panel(ui, &hist) {
+                            self.player.handle(cmd);
+                        }
+                    }
                 }
             });
 

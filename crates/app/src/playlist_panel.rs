@@ -9,7 +9,6 @@ pub fn playlist_panel(
     current: Option<usize>,
 ) -> Vec<Command> {
     let mut cmds = Vec::new();
-    ui.heading(t!("playlist").to_string());
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (i, p) in paths.iter().enumerate() {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
@@ -28,4 +27,22 @@ pub fn playlist_panel(
         }
     });
     cmds
+}
+
+/// 绘制历史列表, 点击某项返回 Open 命令。
+pub fn history_panel(ui: &mut egui::Ui, paths: &[std::path::PathBuf]) -> Option<Command> {
+    let mut cmd = None;
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for p in paths {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+            if ui
+                .selectable_label(false, name)
+                .on_hover_text(p.to_string_lossy().to_string())
+                .clicked()
+            {
+                cmd = Some(Command::Open(p.clone()));
+            }
+        }
+    });
+    cmd
 }

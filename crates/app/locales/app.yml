@@ -39,6 +39,10 @@ playlist:
   en: Playlist
   zh-CN: 播放列表
   zh-TW: 播放清單
+history:
+  en: History
+  zh-CN: 历史
+  zh-TW: 歷史
 prev:
   en: Previous
   zh-CN: 上一个
