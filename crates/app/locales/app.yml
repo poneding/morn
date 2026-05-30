@@ -3,6 +3,10 @@ open_file:
   en: Open
   zh-CN: 打开文件
   zh-TW: 開啟檔案
+open_folder:
+  en: Open Folder
+  zh-CN: 打开文件夹
+  zh-TW: 開啟資料夾
 play:
   en: Play
   zh-CN: 播放

@@ -105,49 +105,60 @@ impl eframe::App for PlayerApp {
         }
 
         egui::Panel::bottom("controls").show_inside(ui, |ui| {
-            for cmd in controls::controls_bar(ui, &t) {
-                if let player_core::Command::OpenDialog = cmd {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter(
-                            t!("video_filter").to_string(),
-                            &["mp4", "mkv", "webm", "mov", "avi"],
-                        )
-                        .pick_file()
-                    {
-                        self.player.handle(player_core::Command::Open(path));
-                    }
-                } else {
-                    self.player.handle(cmd);
-                }
-            }
-            let actions = crate::enhance::enhance_bar(ui, self.rate_pct);
-            for cmd in actions.commands {
-                if let player_core::Command::SetRate(p) = cmd {
-                    self.rate_pct = p;
-                }
-                self.player.handle(cmd);
-            }
-            if actions.screenshot {
-                if let Some((rgba, w, h)) = self.video_view.last_frame() {
-                    match crate::enhance::save_screenshot(rgba, w, h) {
-                        Ok(p) => eprintln!("截图已保存: {}", p.display()),
-                        Err(e) => eprintln!("截图失败: {e}"),
+            ui.horizontal_wrapped(|ui| {
+                for cmd in controls::controls_bar(ui, &t) {
+                    if let player_core::Command::OpenDialog = cmd {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter(
+                                t!("video_filter").to_string(),
+                                &["mp4", "mkv", "webm", "mov", "avi"],
+                            )
+                            .pick_file()
+                        {
+                            self.player.handle(player_core::Command::Open(path));
+                        }
+                    } else {
+                        self.player.handle(cmd);
                     }
                 }
-            }
-            let tracks = self.player.subtitle_tracks().to_vec();
-            if !tracks.is_empty() {
-                if let Some(cmd) = controls::subtitle_track_combo(ui, &tracks) {
+                if ui
+                    .button("📁")
+                    .on_hover_text(t!("open_folder").to_string())
+                    .clicked()
+                {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        self.player.open_folder(&dir);
+                    }
+                }
+                let actions = crate::enhance::enhance_bar(ui, self.rate_pct);
+                for cmd in actions.commands {
+                    if let player_core::Command::SetRate(p) = cmd {
+                        self.rate_pct = p;
+                    }
                     self.player.handle(cmd);
                 }
-            }
-            if ui
-                .button("⚙")
-                .on_hover_text(t!("settings").to_string())
-                .clicked()
-            {
-                self.show_settings = !self.show_settings;
-            }
+                if actions.screenshot {
+                    if let Some((rgba, w, h)) = self.video_view.last_frame() {
+                        match crate::enhance::save_screenshot(rgba, w, h) {
+                            Ok(p) => eprintln!("截图已保存: {}", p.display()),
+                            Err(e) => eprintln!("截图失败: {e}"),
+                        }
+                    }
+                }
+                let tracks = self.player.subtitle_tracks().to_vec();
+                if !tracks.is_empty() {
+                    if let Some(cmd) = controls::subtitle_track_combo(ui, &tracks) {
+                        self.player.handle(cmd);
+                    }
+                }
+                if ui
+                    .button("⚙")
+                    .on_hover_text(t!("settings").to_string())
+                    .clicked()
+                {
+                    self.show_settings = !self.show_settings;
+                }
+            });
         });
 
         egui::Panel::left("playlist")

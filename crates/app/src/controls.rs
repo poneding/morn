@@ -8,66 +8,65 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
     use player_core::PlaybackState;
     let mut cmds = Vec::new();
 
-    ui.horizontal(|ui| {
+    if ui
+        .button("📂")
+        .on_hover_text(t!("open_file").to_string())
+        .clicked()
+    {
+        cmds.push(Command::OpenDialog);
+    }
+    let playing = t.state == PlaybackState::Playing;
+    if ui.button(if playing { "⏸" } else { "▶" }).clicked() {
+        cmds.push(if playing {
+            Command::Pause
+        } else {
+            Command::Play
+        });
+    }
+    if ui.button("⏹").clicked() {
+        cmds.push(Command::Stop);
+    }
+
+    ui.label(t.position_label());
+
+    let mut pos = t.position_ms as f64;
+    let dur = t.duration_ms.max(1) as f64;
+    let resp = ui.add(
+        egui::Slider::new(&mut pos, 0.0..=dur)
+            .show_value(false)
+            .trailing_fill(true),
+    );
+    if resp.changed() {
+        cmds.push(Command::SeekTo(pos as u64));
+    }
+
+    ui.label(t.duration_label());
+
+    let vol_icon = if t.muted || t.volume == 0 {
+        "🔇"
+    } else {
+        "🔊"
+    };
+    ui.menu_button(vol_icon, |ui| {
+        let mut vol = t.volume as f32;
         if ui
-            .button("📂")
-            .on_hover_text(t!("open_file").to_string())
-            .clicked()
-        {
-            cmds.push(Command::OpenDialog);
-        }
-        let playing = t.state == PlaybackState::Playing;
-        if ui.button(if playing { "⏸" } else { "▶" }).clicked() {
-            cmds.push(if playing {
-                Command::Pause
-            } else {
-                Command::Play
-            });
-        }
-        if ui.button("⏹").clicked() {
-            cmds.push(Command::Stop);
-        }
-
-        ui.label(t.position_label());
-
-        let mut pos = t.position_ms as f64;
-        let dur = t.duration_ms.max(1) as f64;
-        let resp = ui.add(
-            egui::Slider::new(&mut pos, 0.0..=dur)
-                .show_value(false)
-                .trailing_fill(true),
-        );
-        if resp.changed() {
-            cmds.push(Command::SeekTo(pos as u64));
-        }
-
-        ui.label(t.duration_label());
-
-        let mut vol = t.volume as f64;
-        if ui
-            .add(egui::Slider::new(&mut vol, 0.0..=100.0).text("🔊"))
+            .add(egui::Slider::new(&mut vol, 0.0..=100.0).vertical())
             .changed()
         {
             cmds.push(Command::SetVolume(vol as u8));
         }
-
-        let mute_icon = if t.muted { "🔇" } else { "🔊" };
-        if ui
-            .button(mute_icon)
-            .on_hover_text(t!("mute_toggle").to_string())
-            .clicked()
-        {
+        if ui.button(t!("mute_toggle").to_string()).clicked() {
             cmds.push(Command::ToggleMute);
         }
-
-        if ui.button("⛶").clicked() {
-            let fs = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
-        }
-
-        ui.label(if t.hardware_decode { "HW" } else { "SW" });
     });
+
+    if ui.button("⛶").clicked() {
+        let fs = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+    }
+
+    ui.label(if t.hardware_decode { "HW" } else { "SW" });
 
     cmds
 }

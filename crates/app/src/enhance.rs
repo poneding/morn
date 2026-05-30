@@ -14,54 +14,52 @@ pub struct EnhanceActions {
 pub fn enhance_bar(ui: &mut egui::Ui, rate_pct: u16) -> EnhanceActions {
     let mut commands = Vec::new();
     let mut screenshot = false;
-    ui.horizontal(|ui| {
-        let mut rate = rate_pct;
-        egui::ComboBox::from_label(t!("rate").to_string())
-            .selected_text(format!("{:.2}x", rate as f32 / 100.0))
-            .show_ui(ui, |ui| {
-                for pct in [50u16, 100, 150, 200] {
-                    ui.selectable_value(&mut rate, pct, format!("{:.2}x", pct as f32 / 100.0));
-                }
-            });
-        if rate != rate_pct {
-            commands.push(Command::SetRate(rate));
-        }
-        if ui
-            .button("⏭|")
-            .on_hover_text(t!("step_frame").to_string())
-            .clicked()
-        {
-            commands.push(Command::StepFrame);
-        }
-        if ui
-            .button("Ⓐ")
-            .on_hover_text(t!("loop_a").to_string())
-            .clicked()
-        {
-            commands.push(Command::SetLoopA);
-        }
-        if ui
-            .button("Ⓑ")
-            .on_hover_text(t!("loop_b").to_string())
-            .clicked()
-        {
-            commands.push(Command::SetLoopB);
-        }
-        if ui
-            .button("✖")
-            .on_hover_text(t!("clear_loop").to_string())
-            .clicked()
-        {
-            commands.push(Command::ClearLoop);
-        }
-        if ui
-            .button("📷")
-            .on_hover_text(t!("screenshot").to_string())
-            .clicked()
-        {
-            screenshot = true;
-        }
-    });
+    let mut rate = rate_pct;
+    egui::ComboBox::from_label(t!("rate").to_string())
+        .selected_text(format!("{:.2}x", rate as f32 / 100.0))
+        .show_ui(ui, |ui| {
+            for pct in [50u16, 100, 150, 200] {
+                ui.selectable_value(&mut rate, pct, format!("{:.2}x", pct as f32 / 100.0));
+            }
+        });
+    if rate != rate_pct {
+        commands.push(Command::SetRate(rate));
+    }
+    if ui
+        .button("⏭|")
+        .on_hover_text(t!("step_frame").to_string())
+        .clicked()
+    {
+        commands.push(Command::StepFrame);
+    }
+    if ui
+        .button("Ⓐ")
+        .on_hover_text(t!("loop_a").to_string())
+        .clicked()
+    {
+        commands.push(Command::SetLoopA);
+    }
+    if ui
+        .button("Ⓑ")
+        .on_hover_text(t!("loop_b").to_string())
+        .clicked()
+    {
+        commands.push(Command::SetLoopB);
+    }
+    if ui
+        .button("✖")
+        .on_hover_text(t!("clear_loop").to_string())
+        .clicked()
+    {
+        commands.push(Command::ClearLoop);
+    }
+    if ui
+        .button("📷")
+        .on_hover_text(t!("screenshot").to_string())
+        .clicked()
+    {
+        screenshot = true;
+    }
     EnhanceActions {
         commands,
         screenshot,
