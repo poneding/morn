@@ -65,7 +65,12 @@ impl VideoView {
 
         let rect = ui.min_rect();
         if let Some(text) = player.current_subtitle() {
-            crate::subtitle_overlay::draw_subtitle(ui, rect, &text);
+            crate::subtitle_overlay::draw_subtitle(
+                ui,
+                rect,
+                &text,
+                player.prefs().subtitle_font_size,
+            );
         }
     }
 

@@ -62,6 +62,48 @@ impl eframe::App for PlayerApp {
 
         let t = self.player.timeline();
 
+        // 键盘快捷键: 空格=播放/暂停, ↑↓=音量(吸附5), ←→=按步长 seek。
+        if !ctx.egui_wants_keyboard_input() {
+            let step_ms = self.player.prefs().seek_step_secs * 1000;
+            let pos = t.position_ms;
+            let dur = t.duration_ms;
+            let space = ctx.input(|i| i.key_pressed(egui::Key::Space));
+            let up = ctx.input(|i| i.key_pressed(egui::Key::ArrowUp));
+            let down = ctx.input(|i| i.key_pressed(egui::Key::ArrowDown));
+            let left = ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+            let right = ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
+            if space {
+                self.player
+                    .handle(if t.state == player_core::PlaybackState::Playing {
+                        player_core::Command::Pause
+                    } else {
+                        player_core::Command::Play
+                    });
+            }
+            if up {
+                self.player.handle(player_core::Command::SetVolume(
+                    crate::shortcuts::snap_volume_up(t.volume),
+                ));
+            }
+            if down {
+                self.player.handle(player_core::Command::SetVolume(
+                    crate::shortcuts::snap_volume_down(t.volume),
+                ));
+            }
+            if left {
+                self.player
+                    .handle(player_core::Command::SeekTo(pos.saturating_sub(step_ms)));
+            }
+            if right {
+                let target = if dur > 0 {
+                    (pos + step_ms).min(dur)
+                } else {
+                    pos + step_ms
+                };
+                self.player.handle(player_core::Command::SeekTo(target));
+            }
+        }
+
         egui::Panel::bottom("controls").show_inside(ui, |ui| {
             for cmd in controls::controls_bar(ui, &t) {
                 if let player_core::Command::OpenDialog = cmd {
