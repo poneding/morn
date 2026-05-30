@@ -18,10 +18,13 @@
 7. **设置 ⚙ 移到控制栏最右**。
 8. **音量改为点击弹出竖向滑块**。
 
-## 待用户在评审时确认的判断点(我已选默认, 可改)
+## 已确认的关键决策
 
-- **A. 启动恢复后是否自动打开/播放上次的视频?** 默认: **恢复列表 + 选中上次的视频, 但不自动打开**(避免启动即加载大文件/突然出声)。视频区仍显示"拖入提示", 用户点列表项或按播放才打开并续播到上次位置。若你要"启动即续播播放", 告诉我。
-- **B. 打开一个视频是否替换整个播放列表为该目录的视频?** 默认: **是**(替换)。即播放列表始终代表"当前视频所在目录"。这会改变此前"拖多个文件累积成列表"的行为 — 符合你 #5 的诉求。若想保留累积模式, 告诉我。
+- **A. 启动行为**: 恢复"当前播放列表(上次的目录)+ 选中上次的视频", **不自动打开/播放**。视频区仍显示拖入提示, 用户点列表项或按播放才打开并续播到上次位置。
+- **B. 播放列表 vs 历史(用户明确)**: 引入**两个独立概念** —
+  - **当前播放列表 (Playlist)**: 始终代表"当前视频所在目录"。打开/拖入一个视频 → 自动替换为该目录的视频; "打开文件夹" → 设为该目录。是临时工作队列。
+  - **播放历史 (History)**: **独立持久化**的"最近播放过的视频"列表(最近优先、去重、上限 ~50), 与播放列表隔离。每次打开一个视频就记入历史(续播位置复用已有 resume_points)。点击历史项 → 打开它(于是播放列表变成它的目录)。
+- **历史 UI**: 左侧栏顶部加 **"列表 / 历史" 切换(tab)**, 同一区域切换显示当前播放列表或历史。
 
 ## 关键事实(已对照本机/已装 crate 验证)
 
@@ -41,17 +44,21 @@ macOS 的 `UI_FONTS` 候选改为 `["/System/Library/Fonts/HelveticaNeue.ttc", "
 - 检查是否每帧无谓重建纹理/克隆大数据(video_view 的 `last_frame` 每帧 clone RGBA 已知偏重 — 评估是否参与卡顿)。
 **诚实声明**: 顶边 live-resize 卡顿可能是 winit/eframe/macOS 上游限制; 若缓解无效, 记录为已知限制, 不强行 hack。此项**不阻塞**其它任务。
 
-### 3. 会话记忆 — 播放列表持久化 (`crates/persist`, `crates/player-core`, `crates/engine`)
-- `Preferences` 加 `last_playlist: Vec<String>`(默认空)与 `last_index: usize`(默认 0)。round-trip 单测。
-- `player-core::Playlist` 加 `set_items(items: Vec<PathBuf>, cursor: usize)`(供恢复)与现有 `iter()/current_index()` 配合; 加单测。
-- `engine::Player::with_prefs`: 若 `prefs.last_playlist` 非空, 用其重建 `playlist`(set_items), cursor=`last_index.min(len-1)`。**不自动 open**(判断点 A 默认)。
-- `engine::Player::save_state`: 把当前 `playlist` 的 items 与 cursor 写入 `prefs.last_playlist/last_index`(连同已有的 volume/resume/settings)。
+### 3. 会话记忆 + 播放历史 (`crates/persist`, `crates/player-core`, `crates/engine`, `crates/app`)
+- `Preferences` 加: `last_playlist: Vec<String>`(默认空)、`last_index: usize`(默认 0)、`history: Vec<String>`(默认空, 最近优先、去重、上限 50)。round-trip 单测。
+- `player-core::Playlist` 加 `set_items(items: Vec<PathBuf>, cursor: usize)`(供恢复/目录导入)+ 单测。
+- `player-core` 加纯函数 `push_history(history: &mut Vec<String>, path: &str, cap: usize)`: 去重(移除已存在)、插到队首、截断到 cap。单测(去重、置顶、上限)。
+- `engine::Player::with_prefs`: 若 `last_playlist` 非空, `playlist.set_items(...)`, cursor=`last_index.min(len-1)`。**不自动 open**(决策 A)。历史从 `prefs.history` 载入(只读副本供 UI)。
+- `engine::Player`: 每次 `open(path)` 成功后调 `push_history(&mut self.prefs.history, key, 50)`。
+- `engine::Player::save_state`: 写回 `last_playlist`(当前 playlist items)、`last_index`、`history`(连同已有 volume/resume/settings)。
+- 暴露 `pub fn history(&self) -> &[String]` 供 UI。
 
 ### 4. 播放列表自动化 (`crates/engine`, `crates/player-core`, `crates/app`)
 - 新增 `engine::sibling_videos(path: &Path) -> Vec<PathBuf>`: 读取 `path` 父目录, 过滤视频扩展名(mp4/mkv/webm/mov/avi/m4v/flv/ts 等, 抽 `is_video_ext` 纯函数 + 单测), 按文件名排序。空/读失败返回仅含 `path` 自身的 Vec(降级)。
 - `Player::handle(Command::Open(path))` 改为: `let vids = sibling_videos(&path); playlist.set_items(vids, index_of(path)); self.open(&path);`(替换 — 判断点 B 默认)。
 - 新增 `player_core::Command::OpenFolder`(单元变体 + 测试)。`app` 层拦截(像 OpenDialog 一样): `rfd::FileDialog::new().pick_folder()` → 若选中, 扫描该目录视频 → `player.handle_open_folder(dir)`(engine 加方法: set_items(scan(dir), 0) 并 open 第一个; 空目录则忽略)。
 - 控制栏/设置区加"打开文件夹"按钮(📁)发 `OpenFolder`。
+- **侧栏 列表/历史 切换**: `PlayerApp` 加 `sidebar_tab: SidebarTab { Playlist, History }`(默认 Playlist)。左侧 `SidePanel` 顶部用 `ui.selectable_value` 画两个 tab(`t!("playlist")` / `t!("history")`); 选中 Playlist 时画现有 `playlist_panel`, 选中 History 时画历史列表(`player.history()`, 每项 `selectable_label(false, 文件名)`, 点击发 `Command::Open(path)` → 打开并把播放列表设为其目录)。历史项可显示完整路径作 hover。
 
 ### 5. 控制栏单行自动换行 (`crates/app/src/controls.rs`, `enhance.rs`, `app.rs`)
 - 把底部面板内的 `controls_bar` + `enhance_bar` + 字幕轨 combo + ⚙ 合并到**一个 `ui.horizontal_wrapped(|ui| {...})`** 中, 窗口窄时自动换行。
@@ -71,7 +78,7 @@ macOS 的 `UI_FONTS` 候选改为 `["/System/Library/Fonts/HelveticaNeue.ttc", "
 - 字体/布局/弹出/换行/拉伸为 GUI, 编译 + clippy + 人工验证。
 
 ## i18n
-新增 UI 串走 `t!()`: `open_folder`(打开文件夹/開啟資料夾/Open Folder)。其余复用已有 key。
+新增 UI 串走 `t!()`: `open_folder`(打开文件夹/開啟資料夾/Open Folder)、`history`(历史/歷史/History)。其余复用已有 key。
 
 ## 已知限制 / 验证项
 - HelveticaNeue 非 SF Pro(SF Pro 技术上无法用); 若仍不满意可考虑内嵌 Inter(后续)。
