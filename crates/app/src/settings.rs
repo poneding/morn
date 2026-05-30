@@ -18,7 +18,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                     .show_ui(ui, |ui| {
                         for (code, label) in [
                             ("zh-CN", "简体中文"),
-                            ("zh-TW", "繁体中文"),
+                            ("zh-TW", "繁體中文"),
                             ("en", "English"),
                         ] {
                             ui.selectable_value(&mut lang, code.to_string(), label);
@@ -86,7 +86,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
 
 fn lang_label(code: &str) -> &'static str {
     match code {
-        "zh-TW" => "繁体中文",
+        "zh-TW" => "繁體中文",
         "en" => "English",
         _ => "简体中文",
     }
