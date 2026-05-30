@@ -3,6 +3,7 @@ mod controls;
 mod enhance;
 mod font;
 mod playlist_panel;
+mod shortcuts;
 mod subtitle_overlay;
 mod video_view;
 
