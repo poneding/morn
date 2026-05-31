@@ -2,6 +2,8 @@ use audio::AudioOutput;
 use media::{AudioDecoder, VideoDecoder};
 use ringbuf::traits::Producer;
 use std::env;
+use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -9,8 +11,12 @@ fn main() {
     let path = env::args().nth(1).expect("用法: playground <视频文件>");
     let path = std::path::PathBuf::from(path);
 
-    // 启动音频输出
-    let mut out = AudioOutput::start().expect("启动音频失败");
+    // 启动音频输出(playground 不调音量/不 seek: 满音量 + 永不置位的 flush)
+    let mut out = AudioOutput::start(
+        Arc::new(AtomicU8::new(100)),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .expect("启动音频失败");
     let clock = out.clock.clone();
 
     // 音频解码线程: 把样本推入 ringbuf

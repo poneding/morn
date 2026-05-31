@@ -3,66 +3,45 @@ use player_core::Command;
 use rust_i18n::t;
 use std::path::PathBuf;
 
+pub const RATE_OPTIONS: [u16; 8] = [25, 50, 75, 100, 125, 150, 175, 200];
+pub const RATE_COMBO_WIDTH: f32 = 0.0;
+
 /// 增强控件本帧产生的动作。
 pub struct EnhanceActions {
     pub commands: Vec<Command>,
     pub screenshot: bool,
+    pub screenshot_notice_pos: Option<egui::Pos2>,
 }
 
-/// 绘制增强控件(倍速下拉 / 逐帧 / 设A / 设B / 清除循环 / 截图)。
+/// 绘制增强控件(倍速下拉 / 截图)。
 /// `rate_pct` 为当前倍速(百分比), 用于下拉显示当前值。
 pub fn enhance_bar(ui: &mut egui::Ui, rate_pct: u16) -> EnhanceActions {
     let mut commands = Vec::new();
     let mut screenshot = false;
+    let mut screenshot_notice_pos = None;
     let mut rate = rate_pct;
-    egui::ComboBox::from_label(t!("rate").to_string())
+    egui::ComboBox::from_id_salt("rate")
+        .width(RATE_COMBO_WIDTH)
         .selected_text(format!("{:.2}x", rate as f32 / 100.0))
         .show_ui(ui, |ui| {
-            for pct in [50u16, 100, 150, 200] {
+            for pct in RATE_OPTIONS {
                 ui.selectable_value(&mut rate, pct, format!("{:.2}x", pct as f32 / 100.0));
             }
-        });
+        })
+        .response
+        .on_hover_text(t!("rate").to_string());
     if rate != rate_pct {
         commands.push(Command::SetRate(rate));
     }
-    if ui
-        .button("⏭|")
-        .on_hover_text(t!("step_frame").to_string())
-        .clicked()
-    {
-        commands.push(Command::StepFrame);
-    }
-    if ui
-        .button("Ⓐ")
-        .on_hover_text(t!("loop_a").to_string())
-        .clicked()
-    {
-        commands.push(Command::SetLoopA);
-    }
-    if ui
-        .button("Ⓑ")
-        .on_hover_text(t!("loop_b").to_string())
-        .clicked()
-    {
-        commands.push(Command::SetLoopB);
-    }
-    if ui
-        .button("✖")
-        .on_hover_text(t!("clear_loop").to_string())
-        .clicked()
-    {
-        commands.push(Command::ClearLoop);
-    }
-    if ui
-        .button("📷")
-        .on_hover_text(t!("screenshot").to_string())
-        .clicked()
-    {
+    let screenshot_response = ui.button("📷").on_hover_text(t!("screenshot").to_string());
+    if screenshot_response.clicked() {
         screenshot = true;
+        screenshot_notice_pos = Some(screenshot_response.rect.left_bottom() + egui::vec2(0.0, 6.0));
     }
     EnhanceActions {
         commands,
         screenshot,
+        screenshot_notice_pos,
     }
 }
 
@@ -82,4 +61,61 @@ fn now_stamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rate_options_include_quarter_and_three_quarter_steps() {
+        assert_eq!(
+            super::RATE_OPTIONS,
+            [25u16, 50, 75, 100, 125, 150, 175, 200]
+        );
+    }
+
+    #[test]
+    fn enhance_bar_does_not_expose_ab_loop_controls() {
+        let source = include_str!("enhance.rs");
+
+        for removed in [
+            concat!("Set", "LoopA"),
+            concat!("Set", "LoopB"),
+            concat!("Clear", "Loop"),
+            concat!("loop", "_a"),
+            concat!("loop", "_b"),
+            concat!("clear", "_loop"),
+        ] {
+            assert!(
+                !source.contains(removed),
+                "enhance bar still references removed AB loop control: {removed}"
+            );
+        }
+    }
+
+    #[test]
+    fn enhance_bar_excludes_removed_frame_step() {
+        let source = include_str!("enhance.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        for removed in [concat!("Step", "Frame"), concat!("step", "_frame")] {
+            assert!(
+                !source.contains(removed),
+                "enhance bar still references removed step-frame control: {removed}"
+            );
+        }
+    }
+
+    #[test]
+    fn rate_dropdown_uses_adaptive_width() {
+        assert_eq!(super::RATE_COMBO_WIDTH, 0.0);
+        let source = include_str!("enhance.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(source.contains("from_id_salt"));
+        assert!(source.contains("width(RATE_COMBO_WIDTH)"));
+        assert!(!source.contains("from_label"));
+    }
 }

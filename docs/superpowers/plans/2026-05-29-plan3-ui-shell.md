@@ -794,10 +794,6 @@ pub fn controls_bar(ui: &mut egui::Ui, t: &Timeline) -> Vec<Command> {
         if ui.button(if playing { "⏸" } else { "▶" }).clicked() {
             cmds.push(if playing { Command::Pause } else { Command::Play });
         }
-        if ui.button("⏹").clicked() {
-            cmds.push(Command::Stop);
-        }
-
         ui.label(t.position_label());
 
         // seek 条: 0..=duration_ms
@@ -893,7 +889,7 @@ impl eframe::App for PlayerApp {
 
 Run: `cargo run -p app`
 Expected(人工):
-- 窗口底部出现控制栏: ▶/⏹ 按钮、时间标签、seek 条、音量条、全屏按钮。
+- 窗口底部出现控制栏: 播放/暂停按钮、时间标签、seek 条、音量条、全屏按钮。
 - 点击全屏按钮 → 窗口进入/退出全屏。
 - 拖入一个视频文件 → 不报错(此时画面还不显示,Task 6 接;但能听到声音,且时间标签开始走动)。
 
@@ -1099,6 +1095,6 @@ git commit -m "style: 计划3 fmt 与 clippy 收尾"
 - **暂停对解码/音频的影响**: 暂停时应暂停 cpal 流推进与解码;当前仅切换状态机。
 - **播放列表 UI**: SidePanel 列表、Next/Prev 接线。
 - **字幕叠加显示**: 把 `subtitle::Subtitles::text_at` 的结果画到画面上。
-- **倍速/逐帧/AB循环/截图**: 播放增强全套。
+- **倍速/截图**: 播放增强全套。
 - **续播**: 打开时读 `persist` 的 resume_point,退出时写回。
 - **音量真正生效**: 当前 `volume` 只存值未作用于音频样本;需在喂样本前乘增益。

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use checkbox (`- [ ]`).
 
-**Goal:** 落实用户实机反馈: 主字体改 HelveticaNeue; 播放列表=当前目录(打开视频/文件夹自动导入); 独立持久化的播放历史(侧栏 列表/历史 切换); 启动恢复上次列表+选中(不自动播放); 控制栏单行自动换行; 设置移到最右; 音量改为点击弹出竖向滑块; 调查顶边拉伸卡顿。
+**Goal:** 落实用户实机反馈: 主字体改 HelveticaNeue; 播放列表=当前目录(打开视频/文件夹自动导入); 独立持久化的播放历史(右侧栏 列表/历史 切换); 启动恢复上次列表+选中(不自动播放); 控制栏单行自动换行; 设置与播放列表开关移到最右; 音量改为点击弹出竖向滑块; 调查顶边拉伸卡顿。
 
 **Architecture:** 设置/历史/列表持久化在 `persist::Preferences`; 纯逻辑(set_items/push_history/is_video_ext)在 `player-core`/`engine` 可单测; 目录扫描在 `engine`; UI 全在 `app`。
 
@@ -409,7 +409,7 @@ git commit -m "feat(app): 控制栏单行自动换行/音量竖向弹出/打开�
 
 ---
 
-## Task 6: app 侧栏 列表/历史 切换
+## Task 6: app 右侧栏 列表/历史 切换
 
 **Files:** Modify `crates/app/src/app.rs`, `crates/app/src/playlist_panel.rs`
 
@@ -422,11 +422,11 @@ enum SidebarTab { Playlist, History }
 ```
 `PlayerApp` 加 `sidebar_tab: SidebarTab`(`new()` 初始化 `SidebarTab::Playlist`)。
 
-- [ ] **Step 2: 左侧面板加 tab + 历史列表**
+- [ ] **Step 2: 右侧面板加 tab + 历史列表**
 
-把现有 `egui::Panel::left("playlist")` 闭包改为:
+把现有 `egui::Panel::right("playlist")` 闭包改为:
 ```rust
-egui::Panel::left("sidebar").default_size(200.0).show_inside(ui, |ui| {
+egui::Panel::right("sidebar").default_size(200.0).show_inside(ui, |ui| {
     ui.horizontal(|ui| {
         ui.selectable_value(&mut self.sidebar_tab, SidebarTab::Playlist, t!("playlist").to_string());
         ui.selectable_value(&mut self.sidebar_tab, SidebarTab::History, t!("history").to_string());
@@ -480,7 +480,7 @@ Run: `cargo build -p app && cargo clippy --all-targets -- -D warnings` → clean
 - [ ] **Step 5: Commit**
 ```bash
 git add crates/app
-git commit -m "feat(app): 侧栏 列表/历史 切换与历史面板"
+git commit -m "feat(app): 右侧栏 列表/历史 切换与历史面板"
 ```
 
 ---
@@ -533,7 +533,7 @@ Expected: clean。
 
 - [ ] **Step 3: 人工走查(用户)**
 
-`cargo run -p app`: ① 字体是 HelveticaNeue 观感; ② 打开一个视频 → 同目录视频进列表、当前项选中; ③ 📁 打开文件夹 → 整目录进列表; ④ 侧栏 列表/历史 切换, 历史显示最近播放、点击重开; ⑤ 重启 → 恢复上次列表+选中(不自动播放); ⑥ 控制栏窄窗换行; ⑦ ⚙ 在最右; ⑧ 音量点击弹竖向滑块; ⑨ 顶边拉伸是否改善(或确认仍有限)。
+`cargo run -p app`: ① 字体是 HelveticaNeue 观感; ② 打开一个视频 → 同目录视频进列表、当前项选中; ③ 📁 打开文件夹 → 整目录进列表; ④ 右侧栏 列表/历史 切换, 历史显示最近播放、点击重开; ⑤ 重启 → 恢复上次列表+选中(不自动播放); ⑥ 控制栏窄窗换行; ⑦ 播放列表开关与 ⚙ 在最右; ⑧ 音量点击弹竖向滑块; ⑨ 顶边拉伸是否改善(或确认仍有限)。
 
 - [ ] **Step 4: Commit(收尾, 若有)**
 ```bash

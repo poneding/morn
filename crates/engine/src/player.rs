@@ -5,7 +5,7 @@ use media::AudioDecoder;
 use player_core::{Command, Playlist, StateMachine};
 use ringbuf::traits::Producer;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -14,6 +14,8 @@ pub struct Player {
     playlist: Playlist,
     volume: u8,
     volume_shared: Arc<AtomicU8>,
+    rate_pct: u16,
+    rate_shared: Arc<AtomicU32>,
     muted: bool,
     volume_before_mute: u8,
     duration_ms: u64,
@@ -23,12 +25,13 @@ pub struct Player {
     audio_stop: Arc<AtomicBool>,
     // u64::MAX 表示无待处理 seek; 否则为目标毫秒, 音频线程消费后复位。
     audio_seek: Arc<AtomicU64>,
+    // 置位后音频回调清空环形缓冲里的陈旧样本(seek 后丢弃旧音频)。
+    audio_flush: Arc<AtomicBool>,
     subtitles: Option<subtitle::Subtitles>,
     sub_tracks: Vec<media::SubtitleTrack>,
-    loop_a: Option<u64>,
-    loop_b: Option<u64>,
     prefs: persist::Preferences,
     prefs_path: std::path::PathBuf,
+    playback_ended: bool,
 }
 
 impl Player {
@@ -38,6 +41,8 @@ impl Player {
             playlist: Playlist::new(),
             volume: 100,
             volume_shared: Arc::new(AtomicU8::new(100)),
+            rate_pct: 100,
+            rate_shared: Arc::new(AtomicU32::new(100)),
             muted: false,
             volume_before_mute: 100,
             duration_ms: 0,
@@ -46,12 +51,12 @@ impl Player {
             audio_join: None,
             audio_stop: Arc::new(AtomicBool::new(false)),
             audio_seek: Arc::new(AtomicU64::new(u64::MAX)),
+            audio_flush: Arc::new(AtomicBool::new(false)),
             subtitles: None,
             sub_tracks: Vec::new(),
-            loop_a: None,
-            loop_b: None,
             prefs: persist::Preferences::default(),
             prefs_path: std::path::PathBuf::new(),
+            playback_ended: false,
         }
     }
 
@@ -88,23 +93,29 @@ impl Player {
     pub fn set_subtitle_font_size(&mut self, size: f32) {
         self.prefs.subtitle_font_size = size;
     }
+    pub fn set_playback_mode(&mut self, mode: persist::PlaybackMode) {
+        self.prefs.playback_mode = mode;
+    }
 
-    pub fn timeline(&self) -> Timeline {
-        let position_ms = self
-            .audio_out
+    fn raw_position_ms(&self) -> u64 {
+        self.audio_out
             .as_ref()
             .map(|a| a.clock.position_ms())
-            .unwrap_or(0);
+            .unwrap_or(0)
+    }
+
+    pub fn timeline(&self) -> Timeline {
+        let position_ms = if self.duration_ms > 0 {
+            self.raw_position_ms().min(self.duration_ms)
+        } else {
+            self.raw_position_ms()
+        };
         Timeline {
             position_ms,
             duration_ms: self.duration_ms,
             state: self.machine.state(),
             volume: self.volume,
-            hardware_decode: self
-                .video
-                .as_ref()
-                .map(|v| v.is_hardware())
-                .unwrap_or(false),
+            rate_pct: self.rate_pct,
             muted: self.muted,
         }
     }
@@ -160,6 +171,62 @@ impl Player {
         self.volume_shared.store(v.min(100), Ordering::Relaxed);
     }
 
+    fn seek_to(&mut self, ms: u64) {
+        let target = if self.duration_ms > 0 {
+            ms.min(self.duration_ms)
+        } else {
+            ms
+        };
+        self.playback_ended = false;
+        if let Some(v) = &self.video {
+            v.request_seek(target);
+            // 排空已缓冲的旧帧(尤其向后 seek 时, 旧帧 PTS 在目标之后不会被 decide_frame 丢弃)
+            while v.try_recv_frame().is_some() {}
+        }
+        self.audio_seek.store(target, Ordering::Relaxed);
+        // 丢弃环形缓冲里约 1s 的旧音频, 否则 seek 后旧声音还会续播一会儿。
+        self.audio_flush.store(true, Ordering::Relaxed);
+        if let Some(a) = &self.audio_out {
+            a.clock.reset_to(target);
+        }
+    }
+
+    pub fn tick(&mut self) {
+        if self.machine.state() != player_core::PlaybackState::Playing || self.duration_ms == 0 {
+            return;
+        }
+        if self.raw_position_ms() < self.duration_ms {
+            return;
+        }
+
+        match end_playback_action(
+            self.prefs.playback_mode,
+            self.playlist.len(),
+            self.playlist.current_index(),
+        ) {
+            EndPlaybackAction::PauseAtEnd => {
+                if let Some(a) = &self.audio_out {
+                    a.clock.reset_to(self.duration_ms);
+                    a.pause();
+                }
+                let _ = self.machine.apply(player_core::Transition::Pause);
+                self.playback_ended = true;
+            }
+            EndPlaybackAction::RepeatCurrent => {
+                self.seek_to(0);
+                if let Some(a) = &self.audio_out {
+                    a.resume();
+                }
+            }
+            EndPlaybackAction::OpenPlaylistIndex(index) => {
+                self.playlist.set_cursor(index);
+                if let Some(path) = self.playlist.current().map(|p| p.to_path_buf()) {
+                    self.open(&path);
+                }
+            }
+        }
+    }
+
     pub fn handle(&mut self, cmd: Command) {
         match cmd {
             Command::Open(path) => {
@@ -171,6 +238,9 @@ impl Player {
             Command::Play => {
                 if self.video.is_some() && self.machine.apply(player_core::Transition::Play).is_ok()
                 {
+                    if self.playback_ended {
+                        self.seek_to(0);
+                    }
                     if let Some(a) = &self.audio_out {
                         a.resume();
                     }
@@ -204,27 +274,16 @@ impl Player {
             Command::OpenDialog => {}
             Command::OpenFolder => {}
             Command::SeekTo(ms) => {
-                if let Some(v) = &self.video {
-                    v.request_seek(ms);
-                    // 排空已缓冲的旧帧(尤其向后 seek 时, 旧帧 PTS 在目标之后不会被 decide_frame 丢弃)
-                    while v.try_recv_frame().is_some() {}
-                }
-                self.audio_seek.store(ms, Ordering::Relaxed);
-                if let Some(a) = &self.audio_out {
-                    a.clock.reset_to(ms);
-                }
+                self.seek_to(ms);
             }
             Command::SetRate(pct) => {
+                let pct = clamp_rate_pct(pct);
+                self.rate_pct = pct;
+                self.rate_shared.store(pct as u32, Ordering::Relaxed);
                 if let Some(a) = &self.audio_out {
                     a.clock.set_rate(pct);
+                    self.audio_flush.store(true, Ordering::Relaxed);
                 }
-            }
-            Command::StepFrame => self.step_frame(),
-            Command::SetLoopA => self.loop_a = Some(self.timeline().position_ms),
-            Command::SetLoopB => self.loop_b = Some(self.timeline().position_ms),
-            Command::ClearLoop => {
-                self.loop_a = None;
-                self.loop_b = None;
             }
             Command::Next => {
                 if let Some(p) = self.playlist.next().map(|p| p.to_path_buf()) {
@@ -248,25 +307,6 @@ impl Player {
                         self.subtitles = Some(s);
                     }
                 }
-            }
-        }
-    }
-
-    /// 暂停状态下手动前进一帧(假设约 30fps → 33ms)。
-    pub fn step_frame(&mut self) {
-        if self.machine.state() == player_core::PlaybackState::Paused {
-            let pos = self.timeline().position_ms;
-            if let Some(a) = &self.audio_out {
-                a.clock.reset_to(pos + 33);
-            }
-        }
-    }
-
-    /// UI 每帧调用: 到达 B 点则跳回 A 点(AB 循环)。
-    pub fn tick(&mut self) {
-        if let (Some(a), Some(b)) = (self.loop_a, self.loop_b) {
-            if self.timeline().position_ms >= b {
-                self.handle(player_core::Command::SeekTo(a));
             }
         }
     }
@@ -298,6 +338,7 @@ impl Player {
 
     fn open(&mut self, path: &Path) {
         self.teardown();
+        self.playback_ended = false;
 
         let video = match DecodeThread::spawn(path, 16) {
             Ok(v) => v,
@@ -307,36 +348,58 @@ impl Player {
             }
         };
 
-        match AudioOutput::start() {
+        match AudioOutput::start(self.volume_shared.clone(), self.audio_flush.clone()) {
             Ok(out) => {
+                out.clock.set_rate(self.rate_pct);
+                let output_rate = out.sample_rate;
                 let (handle, mut producer) = out.split();
                 self.duration_ms = probe_duration_ms(path).unwrap_or(0);
                 let apath = path.to_path_buf();
                 let stop = Arc::new(AtomicBool::new(false));
                 let stop_t = stop.clone();
-                let vol_shared = self.volume_shared.clone();
                 let seek_t = self.audio_seek.clone();
+                let rate_t = self.rate_shared.clone();
                 let join = std::thread::spawn(move || {
                     let mut adec = match AudioDecoder::open(&apath) {
                         Ok(d) => d,
                         Err(_) => return,
                     };
+                    let mut converter = audio::PlaybackRateConverter::new(
+                        adec.channels(),
+                        adec.sample_rate(),
+                        output_rate,
+                    );
+                    let mut current_rate = rate_t.load(Ordering::Relaxed).clamp(25, 400) as u16;
+                    converter.set_rate(current_rate);
                     'outer: while !stop_t.load(Ordering::Relaxed) {
                         // 消费待处理 seek; swap 保证仅触发一次。
-                        // 已知局限: cpal ringbuf 中约 1s 旧样本会在新位置音频追上前短暂续播,
-                        // 精确清空 ringbuf 推迟到后续任务。
                         let st = seek_t.swap(u64::MAX, Ordering::Relaxed);
                         if st != u64::MAX {
                             let _ = adec.seek_ms(st);
+                            converter.reset();
+                        }
+                        let requested_rate = rate_t.load(Ordering::Relaxed).clamp(25, 400) as u16;
+                        if requested_rate != current_rate {
+                            current_rate = requested_rate;
+                            converter.set_rate(current_rate);
                         }
                         match adec.next_chunk() {
                             Ok(Some(chunk)) => {
-                                let mut buf = chunk.samples;
-                                audio::apply_gain(&mut buf, vol_shared.load(Ordering::Relaxed));
+                                let buf = converter.convert(&chunk.samples);
                                 let mut i = 0;
                                 while i < buf.len() {
                                     if stop_t.load(Ordering::Relaxed) {
                                         break 'outer;
+                                    }
+                                    // 新 seek 到来时立即放弃当前(旧位置)这块样本, 回到循环顶部去 seek,
+                                    // 配合回调 flush 让新位置音频尽快接上。
+                                    if seek_t.load(Ordering::Relaxed) != u64::MAX {
+                                        continue 'outer;
+                                    }
+                                    if rate_t.load(Ordering::Relaxed).clamp(25, 400) as u16
+                                        != current_rate
+                                    {
+                                        continue 'outer;
                                     }
                                     if producer.try_push(buf[i]).is_ok() {
                                         i += 1;
@@ -345,7 +408,9 @@ impl Player {
                                     }
                                 }
                             }
-                            Ok(None) | Err(_) => break,
+                            Ok(None) | Err(_) => {
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
                         }
                     }
                 });
@@ -374,6 +439,7 @@ impl Player {
                     v.request_seek(ms);
                 }
                 self.audio_seek.store(ms, Ordering::Relaxed);
+                self.audio_flush.store(true, Ordering::Relaxed);
                 if let Some(a) = &self.audio_out {
                     a.clock.reset_to(ms);
                 }
@@ -382,6 +448,7 @@ impl Player {
     }
 
     fn teardown(&mut self) {
+        self.playback_ended = false;
         self.audio_stop.store(true, Ordering::Relaxed);
         if let Some(j) = self.audio_join.take() {
             let _ = j.join();
@@ -393,9 +460,7 @@ impl Player {
         self.duration_ms = 0;
         self.audio_stop = Arc::new(AtomicBool::new(false));
         self.audio_seek = Arc::new(AtomicU64::new(u64::MAX));
-        // AB 循环点属于单个文件; 切换/停止时清除, 避免 tick() 用旧文件的点误 seek。
-        self.loop_a = None;
-        self.loop_b = None;
+        self.audio_flush = Arc::new(AtomicBool::new(false));
     }
 }
 
@@ -424,6 +489,10 @@ fn is_video_ext(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|e| VIDEO_EXTS.contains(&e.to_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+fn clamp_rate_pct(pct: u16) -> u16 {
+    pct.clamp(25, 400)
 }
 
 /// `video` 所在目录下所有视频(按文件名排序)。读失败/空则返回 [video]。
@@ -469,6 +538,34 @@ fn probe_duration_ms(path: &Path) -> Option<u64> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndPlaybackAction {
+    PauseAtEnd,
+    RepeatCurrent,
+    OpenPlaylistIndex(usize),
+}
+
+fn end_playback_action(
+    mode: persist::PlaybackMode,
+    playlist_len: usize,
+    current_index: Option<usize>,
+) -> EndPlaybackAction {
+    match mode {
+        persist::PlaybackMode::StopAtEnd => EndPlaybackAction::PauseAtEnd,
+        persist::PlaybackMode::RepeatOne => EndPlaybackAction::RepeatCurrent,
+        persist::PlaybackMode::LoopPlaylist => {
+            let Some(index) = current_index else {
+                return EndPlaybackAction::RepeatCurrent;
+            };
+            if playlist_len <= 1 {
+                EndPlaybackAction::RepeatCurrent
+            } else {
+                EndPlaybackAction::OpenPlaylistIndex((index + 1) % playlist_len)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +577,7 @@ mod tests {
         let t = p.timeline();
         assert_eq!(t.state, PlaybackState::Stopped);
         assert_eq!(t.volume, 100);
+        assert_eq!(t.rate_pct, 100);
     }
 
     #[test]
@@ -487,6 +585,13 @@ mod tests {
         let mut p = Player::new();
         p.handle(Command::SetVolume(40));
         assert_eq!(p.timeline().volume, 40);
+    }
+
+    #[test]
+    fn set_rate_command_updates_timeline_even_without_media() {
+        let mut p = Player::new();
+        p.handle(Command::SetRate(175));
+        assert_eq!(p.timeline().rate_pct, 175);
     }
 
     #[test]
@@ -503,10 +608,44 @@ mod tests {
         p.set_language("en");
         p.set_theme("dark");
         p.set_subtitle_font_size(32.0);
+        p.set_playback_mode(persist::PlaybackMode::LoopPlaylist);
         assert_eq!(p.prefs().seek_step_secs, 20);
         assert_eq!(p.prefs().language, "en");
         assert_eq!(p.prefs().theme, "dark");
         assert_eq!(p.prefs().subtitle_font_size, 32.0);
+        assert_eq!(p.prefs().playback_mode, persist::PlaybackMode::LoopPlaylist);
+    }
+
+    #[test]
+    fn stop_mode_pauses_at_end() {
+        assert_eq!(
+            super::end_playback_action(persist::PlaybackMode::StopAtEnd, 2, Some(0)),
+            super::EndPlaybackAction::PauseAtEnd
+        );
+    }
+
+    #[test]
+    fn repeat_mode_restarts_current_item() {
+        assert_eq!(
+            super::end_playback_action(persist::PlaybackMode::RepeatOne, 2, Some(0)),
+            super::EndPlaybackAction::RepeatCurrent
+        );
+    }
+
+    #[test]
+    fn loop_mode_advances_and_wraps_playlist() {
+        assert_eq!(
+            super::end_playback_action(persist::PlaybackMode::LoopPlaylist, 3, Some(0)),
+            super::EndPlaybackAction::OpenPlaylistIndex(1)
+        );
+        assert_eq!(
+            super::end_playback_action(persist::PlaybackMode::LoopPlaylist, 3, Some(2)),
+            super::EndPlaybackAction::OpenPlaylistIndex(0)
+        );
+        assert_eq!(
+            super::end_playback_action(persist::PlaybackMode::LoopPlaylist, 1, Some(0)),
+            super::EndPlaybackAction::RepeatCurrent
+        );
     }
 
     #[test]

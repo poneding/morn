@@ -42,9 +42,9 @@
 - `crates/app/src/main.rs` 顶部 `rust_i18n::i18n!("locales");`(默认 fallback locale = `en` 或 `zh-CN`, 取 zh-CN)。
 - 语言文件 `crates/app/locales/`(rust-i18n v2 多语言单文件或分文件, 实现时定): 每个 key 给 `en`/`zh-CN`/`zh-TW` 三个值。
 - 现有所有硬编码中文 UI 串改为 `t!("key")`。需翻译的串清单(约 30 条), 分布于:
-  - `controls.rs`: 打开文件、静音切换、字幕轨、选择、HW/SW(保留英文)
+  - `controls.rs`: 打开文件、静音切换、字幕轨、选择
   - `playlist_panel.rs`: 播放列表、上一个、下一个
-  - `enhance.rs`: 倍速、逐帧(暂停时)、设循环起点、设循环终点、清除 AB 循环、截图
+  - `enhance.rs`: 倍速、截图
   - `video_view.rs`: 拖入视频文件开始播放
   - `app.rs`: rfd 文件过滤器 "视频"
   - 设置窗口新串: 设置、外观、语言、主题、深色、浅色、跟随系统、播放、快进步长、字幕、字幕字号、秒、关闭

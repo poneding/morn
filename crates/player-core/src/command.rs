@@ -14,10 +14,6 @@ pub enum Command {
     Next,
     Prev,
     PlayIndex(usize),
-    StepFrame,
-    SetLoopA,
-    SetLoopB,
-    ClearLoop,
     ToggleMute,
     OpenDialog,
     OpenFolder,
@@ -40,10 +36,6 @@ mod tests {
         assert_eq!(Command::SetVolume(80), Command::SetVolume(80));
         assert_eq!(Command::SetRate(150), Command::SetRate(150));
         assert_eq!(Command::PlayIndex(2), Command::PlayIndex(2));
-        assert_eq!(Command::StepFrame, Command::StepFrame);
-        assert_eq!(Command::SetLoopA, Command::SetLoopA);
-        assert_eq!(Command::SetLoopB, Command::SetLoopB);
-        assert_eq!(Command::ClearLoop, Command::ClearLoop);
         assert_eq!(Command::ToggleMute, Command::ToggleMute);
         assert_eq!(Command::OpenDialog, Command::OpenDialog);
         assert_eq!(Command::OpenFolder, Command::OpenFolder);
@@ -52,5 +44,18 @@ mod tests {
             Command::SelectSubtitleTrack(1)
         );
         assert_ne!(Command::Play, Command::Pause);
+    }
+
+    #[test]
+    fn command_api_excludes_removed_frame_step() {
+        let source = include_str!("command.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(
+            !source.contains(concat!("Step", "Frame")),
+            "command API still exposes removed step-frame playback"
+        );
     }
 }

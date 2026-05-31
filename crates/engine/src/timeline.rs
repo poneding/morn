@@ -7,7 +7,7 @@ pub struct Timeline {
     pub duration_ms: u64,
     pub state: PlaybackState,
     pub volume: u8,
-    pub hardware_decode: bool,
+    pub rate_pct: u16,
     pub muted: bool,
 }
 
@@ -16,7 +16,7 @@ impl Timeline {
         if self.duration_ms == 0 {
             0.0
         } else {
-            self.position_ms as f32 / self.duration_ms as f32
+            (self.position_ms as f32 / self.duration_ms as f32).min(1.0)
         }
     }
 
@@ -46,7 +46,7 @@ mod tests {
             duration_ms: 125_000,
             state: PlaybackState::Playing,
             volume: 100,
-            hardware_decode: false,
+            rate_pct: 100,
             muted: false,
         };
         assert_eq!(t.position_label(), "01:05");
@@ -60,10 +60,23 @@ mod tests {
             duration_ms: 100_000,
             state: PlaybackState::Playing,
             volume: 100,
-            hardware_decode: false,
+            rate_pct: 100,
             muted: false,
         };
         assert!((t.progress() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn progress_does_not_exceed_duration() {
+        let t = Timeline {
+            position_ms: 120_000,
+            duration_ms: 100_000,
+            state: PlaybackState::Playing,
+            volume: 100,
+            rate_pct: 100,
+            muted: false,
+        };
+        assert_eq!(t.progress(), 1.0);
     }
 
     #[test]
@@ -73,7 +86,7 @@ mod tests {
             duration_ms: 0,
             state: PlaybackState::Stopped,
             volume: 100,
-            hardware_decode: false,
+            rate_pct: 100,
             muted: false,
         };
         assert_eq!(t.progress(), 0.0);

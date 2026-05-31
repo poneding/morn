@@ -380,22 +380,6 @@ rate:
   en: Speed
   zh-CN: 倍速
   zh-TW: 倍速
-step_frame:
-  en: Step Frame (when paused)
-  zh-CN: 逐帧(暂停时)
-  zh-TW: 逐幀(暫停時)
-loop_a:
-  en: Set Loop Start
-  zh-CN: 设循环起点
-  zh-TW: 設迴圈起點
-loop_b:
-  en: Set Loop End
-  zh-CN: 设循环终点
-  zh-TW: 設迴圈終點
-clear_loop:
-  en: Clear AB Loop
-  zh-CN: 清除 AB 循环
-  zh-TW: 清除 AB 迴圈
 screenshot:
   en: Screenshot
   zh-CN: 截图
@@ -484,7 +468,7 @@ git commit -m "feat(app): 接入 rust-i18n 与简繁英语言文件"
 **Files:**
 - Modify: `crates/app/src/controls.rs`, `playlist_panel.rs`, `enhance.rs`, `video_view.rs`, `app.rs`
 
-每个文件顶部加 `use rust_i18n::t;`。把硬编码中文串替换为 `t!("key").to_string()`(egui widget 取 `String`)。图标(emoji)与 "HW"/"SW"、倍速 "{:.2}x"、语言名("简体中文" 等)**不改**。
+每个文件顶部加 `use rust_i18n::t;`。把硬编码中文串替换为 `t!("key").to_string()`(egui widget 取 `String`)。图标(emoji)、倍速 "{:.2}x"、语言名("简体中文" 等)**不改**。
 
 - [ ] **Step 1: controls.rs**
 
@@ -492,7 +476,7 @@ git commit -m "feat(app): 接入 rust-i18n 与简繁英语言文件"
 - 打开按钮 tooltip: `.on_hover_text("打开文件")` → `.on_hover_text(t!("open_file").to_string())`
 - 静音 tooltip: `.on_hover_text("静音切换")` → `.on_hover_text(t!("mute_toggle").to_string())`
 - 字幕轨 combo: `egui::ComboBox::from_label("字幕轨")` → `from_label(t!("subtitle_track").to_string())`; `.selected_text("选择")` → `.selected_text(t!("select").to_string())`
-(播放/暂停/停止/全屏为 emoji 图标, 不改; HW/SW 不改。)
+(播放/暂停/停止/全屏为 emoji 图标, 不改。)
 
 - [ ] **Step 2: playlist_panel.rs**
 
@@ -503,10 +487,6 @@ git commit -m "feat(app): 接入 rust-i18n 与简繁英语言文件"
 - [ ] **Step 3: enhance.rs**
 
 - `from_label("倍速")` → `from_label(t!("rate").to_string())`
-- `.on_hover_text("逐帧(暂停时)")` → `t!("step_frame").to_string()`
-- `.on_hover_text("设循环起点")` → `t!("loop_a").to_string()`
-- `.on_hover_text("设循环终点")` → `t!("loop_b").to_string()`
-- `.on_hover_text("清除 AB 循环")` → `t!("clear_loop").to_string()`
 - `.on_hover_text("截图")` → `t!("screenshot").to_string()`
 
 - [ ] **Step 4: video_view.rs**

@@ -1,5 +1,5 @@
 use eframe::egui;
-use engine::Player;
+use engine::{PlaybackMode, Player};
 use rust_i18n::t;
 
 /// 绘制设置窗口。`open` 控制显隐, 直接读写 player 的偏好。
@@ -71,6 +71,32 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                     player.set_seek_step(step);
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label(t!("playback_mode").to_string());
+                let mut mode = player.prefs().playback_mode;
+                egui::ComboBox::from_id_salt("playback_mode")
+                    .selected_text(playback_mode_label(mode))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut mode,
+                            PlaybackMode::StopAtEnd,
+                            t!("playback_stop_at_end").to_string(),
+                        );
+                        ui.selectable_value(
+                            &mut mode,
+                            PlaybackMode::LoopPlaylist,
+                            t!("playback_loop_playlist").to_string(),
+                        );
+                        ui.selectable_value(
+                            &mut mode,
+                            PlaybackMode::RepeatOne,
+                            t!("playback_repeat_one").to_string(),
+                        );
+                    });
+                if mode != player.prefs().playback_mode {
+                    player.set_playback_mode(mode);
+                }
+            });
             ui.separator();
             // 字幕
             ui.heading(t!("subtitle").to_string());
@@ -96,5 +122,28 @@ fn theme_label(code: &str) -> String {
         "dark" => t!("theme_dark").to_string(),
         "light" => t!("theme_light").to_string(),
         _ => t!("theme_system").to_string(),
+    }
+}
+
+fn playback_mode_label(mode: PlaybackMode) -> String {
+    match mode {
+        PlaybackMode::StopAtEnd => t!("playback_stop_at_end").to_string(),
+        PlaybackMode::LoopPlaylist => t!("playback_loop_playlist").to_string(),
+        PlaybackMode::RepeatOne => t!("playback_repeat_one").to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn settings_exposes_playback_mode() {
+        let source = include_str!("settings.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("playback_mode"));
+        assert!(source.contains("LoopPlaylist"));
+        assert!(source.contains("RepeatOne"));
     }
 }

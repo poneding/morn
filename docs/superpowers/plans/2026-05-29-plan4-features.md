@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在可用播放器之上补齐 spec 首版功能: seek 真正生效、暂停/音量作用于音频、播放列表面板与 Next/Prev、字幕叠加(.srt + .ass)、播放增强(倍速/逐帧/AB循环/截图)、续播状态记忆。完成后即达到 spec 首版全部功能。
+**Goal:** 在可用播放器之上补齐 spec 首版功能: seek 真正生效、暂停/音量作用于音频、播放列表面板与 Next/Prev、字幕叠加(.srt + .ass)、播放增强(倍速/截图)、续播状态记忆。完成后即达到 spec 首版全部功能。
 
 **Architecture:** 大部分功能是把已有纯逻辑 crate(`subtitle`、`persist`、`player-core::Playlist`)接到 `engine::Player` 与 `app` UI 上,并补齐 `Player` 中计划 3 留空的命令处理。seek 通过重启解码线程到目标时间 + 重置主时钟实现。音量/倍速作用于音频样本喂入环节。
 
@@ -21,9 +21,9 @@ crates/
 ├── audio/src/output.rs         # 修改: 音量增益、暂停
 ├── persist (已有)              # 接线: 打开读续播、退出写续播
 └── app/src/
-    ├── playlist_panel.rs       # 新增: 侧栏播放列表 UI
+    ├── playlist_panel.rs       # 新增: 右侧播放列表 UI
     ├── subtitle_overlay.rs     # 新增: 字幕叠加绘制
-    └── enhance.rs              # 新增: 倍速/逐帧/AB/截图 UI 与命令
+    └── enhance.rs              # 新增: 倍速/截图 UI 与命令
 ```
 
 ---
@@ -262,9 +262,9 @@ git commit -m "feat: seek 到关键帧并重置主时钟"
 ```
 
 ---
-## Task 4: 播放列表 Next/Prev + 侧栏 UI
+## Task 4: 播放列表 Next/Prev + 右侧面板 UI
 
-`player-core::Playlist` 已就绪;接线 Player 的 Next/Prev 与一个侧栏列表 UI。
+`player-core::Playlist` 已就绪;接线 Player 的 Next/Prev 与一个右侧列表 UI。
 
 **Files:**
 - Modify: `crates/engine/src/player.rs`
@@ -314,14 +314,14 @@ pub fn set_cursor(&mut self, i: usize) { if i < self.items.len() { self.cursor =
 ```
 并加单测验证 `iter`/`current_index`/`set_cursor` 行为(3 个断言)。
 
-- [ ] **Step 2: 侧栏列表 UI**
+- [ ] **Step 2: 右侧列表 UI**
 
 `crates/app/src/playlist_panel.rs`:
 ```rust
 use eframe::egui;
 use player_core::Command;
 
-/// 绘制左侧播放列表, 返回点击某项产生的命令。
+/// 绘制右侧播放列表, 返回点击某项产生的命令。
 pub fn playlist_panel(
     ui: &mut egui::Ui,
     paths: &[std::path::PathBuf],
@@ -347,11 +347,11 @@ pub fn playlist_panel(
 ```
 注: `Command::PlayIndex(usize)` 是本任务新增的变体(下方 Step 说明)。
 
-- [ ] **Step 3: app 接入侧栏**
+- [ ] **Step 3: app 接入右侧面板**
 
 `main.rs` 加 `mod playlist_panel;`。`app.rs` 的 `ui()` 在中央面板前加:
 ```rust
-egui::SidePanel::left("playlist").default_width(200.0).show_inside(ui, |ui| {
+egui::SidePanel::right("playlist").default_width(200.0).show_inside(ui, |ui| {
     let paths = self.player.playlist_paths();
     let cur = self.player.current_index();
     for cmd in crate::playlist_panel::playlist_panel(ui, &paths, cur) {
@@ -366,13 +366,13 @@ Run: `cargo test`
 Expected: PASS(含新增 playlist / command 测试)。
 
 Run: `cargo run -p app`(人工)
-Expected: 拖入多个文件依次出现在左侧列表;点击列表项切换播放;上一个/下一个按钮工作,当前项高亮。
+Expected: 拖入多个文件依次出现在右侧列表;点击列表项切换播放;上一个/下一个按钮工作,当前项高亮。
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add crates/player-core crates/engine crates/app
-git commit -m "feat: 播放列表 Next/Prev/PlayIndex 与侧栏 UI"
+git commit -m "feat: 播放列表 Next/Prev/PlayIndex 与右侧面板 UI"
 ```
 
 ---
@@ -647,7 +647,7 @@ git commit -m "feat: 字幕叠加显示(自动加载同名 + 拖入)"
 
 ---
 
-## Task 7: 播放增强(倍速/逐帧/AB循环/截图)
+## Task 7: 播放增强(倍速/截图)
 
 **Files:**
 - Modify: `crates/engine/src/player.rs`
@@ -666,25 +666,7 @@ base * self.rate.load(Ordering::Relaxed) as u64 / 100
 加 `set_rate(&self, pct: u16)`。`Player::handle` 的 `SetRate(pct)` 调 `self.audio_out.clock.set_rate(pct)`。
 注: 真实倍速还需音频变速(变调或不变调),首版仅做时钟与视频帧节奏的倍速,音频倍速标注为后续优化。给 clock 加 2 个倍速单测(1x 不变、200% 翻倍)。
 
-- [ ] **Step 2: 逐帧步进 — Player 处理**
-
-逐帧: 暂停状态下,前进一帧 = 主时钟手动 +一帧时长(假设 30fps→33ms),触发 video_view 取下一帧。给 `Player` 加 `pub fn step_frame(&mut self)`: 仅在 Paused 时,`clock.reset_to(position + 33)`。UI 加按钮发对应命令(新增 `Command::StepFrame`)。给 command 测试加一行。
-
-- [ ] **Step 3: AB 循环 — Player 状态**
-
-`Player` 加 `loop_a: Option<u64>, loop_b: Option<u64>`。新增命令 `Command::SetLoopA`/`SetLoopB`/`ClearLoop`(各加 command 测试一行)。播放推进时(UI 每帧调用的一个 `Player::tick()` 方法)检测 `position >= loop_b` 则 seek 回 `loop_a`:
-```rust
-pub fn tick(&mut self) {
-    if let (Some(a), Some(b)) = (self.loop_a, self.loop_b) {
-        if self.timeline().position_ms >= b {
-            self.handle(player_core::Command::SeekTo(a));
-        }
-    }
-}
-```
-`app.rs` 每帧 `ui()` 调 `self.player.tick();`。
-
-- [ ] **Step 4: 截图 — 保存当前帧**
+- [ ] **Step 2: 截图 — 保存当前帧**
 
 `enhance.rs` + `image` crate 把当前显示的 RGBA 帧写 PNG。`VideoView` 缓存最后一帧的 `(rgba, w, h)`;截图按钮调用保存:
 `crates/app/Cargo.toml` 加 `image = "0.25"`。
@@ -709,7 +691,7 @@ fn now_stamp() -> u64 {
 
 - [ ] **Step 5: 增强控件 UI**
 
-`enhance.rs` 加一个绘制函数返回命令: 倍速下拉(0.5/1.0/1.5/2.0)、逐帧按钮(⏭|)、设 A/设 B/清除循环、截图按钮。`controls.rs` 或单独面板调用。`main.rs` 加 `mod enhance;`。
+`enhance.rs` 加一个绘制函数返回命令: 倍速下拉(0.5/1.0/1.5/2.0)、截图按钮。`controls.rs` 或单独面板调用。`main.rs` 加 `mod enhance;`。
 
 - [ ] **Step 6: 验证**
 
@@ -717,13 +699,13 @@ Run: `cargo test`
 Expected: PASS(含新增 clock 倍速、command 变体测试)。
 
 Run: `cargo run -p app`(人工)
-Expected: 切换倍速播放速度变化;暂停后逐帧前进;设 A/B 后循环该区间;截图生成 PNG(打印路径,打开确认是当前画面)。
+Expected: 切换倍速播放速度变化;截图生成 PNG(打印路径,打开确认是当前画面)。
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add crates/audio crates/player-core crates/engine crates/app
-git commit -m "feat: 倍速/逐帧/AB循环/截图"
+git commit -m "feat: 倍速/截图"
 ```
 
 ---
@@ -1062,7 +1044,7 @@ Expected(人工): 记录可执行文件大小。注: 此为开发期动态链接
 
 - [ ] **Step 4: spec 首版功能走查(人工)**
 
-对照 spec 第 5 节逐项确认: 打开(对话框/拖拽)、播放/暂停/停止、seek、音量/静音、全屏、播放列表(队列/上下个/面板)、字幕(srt/ass/切换)、倍速、逐帧、AB循环、截图、续播、记忆偏好。逐项打勾。
+对照 spec 第 5 节逐项确认: 打开(对话框/拖拽)、播放/暂停/停止、seek、音量/静音、全屏、播放列表(队列/上下个/面板)、字幕(srt/ass/切换)、倍速、截图、续播、记忆偏好。逐项打勾。
 
 - [ ] **Step 5: Commit**
 

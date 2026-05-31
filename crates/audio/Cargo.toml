@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 cpal = "0.17"
 ringbuf = "0.5"
+signalsmith-stretch = "0.1.3"

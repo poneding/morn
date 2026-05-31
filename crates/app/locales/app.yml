@@ -55,26 +55,22 @@ rate:
   en: Speed
   zh-CN: 倍速
   zh-TW: 倍速
-step_frame:
-  en: Step Frame (when paused)
-  zh-CN: 逐帧(暂停时)
-  zh-TW: 逐幀(暫停時)
-loop_a:
-  en: Set Loop Start
-  zh-CN: 设循环起点
-  zh-TW: 設迴圈起點
-loop_b:
-  en: Set Loop End
-  zh-CN: 设循环终点
-  zh-TW: 設迴圈終點
-clear_loop:
-  en: Clear AB Loop
-  zh-CN: 清除 AB 循环
-  zh-TW: 清除 AB 迴圈
 screenshot:
   en: Screenshot
   zh-CN: 截图
   zh-TW: 截圖
+screenshot_saved:
+  en: Screenshot saved
+  zh-CN: 截图已保存
+  zh-TW: 截圖已儲存
+screenshot_failed:
+  en: Screenshot failed
+  zh-CN: 截图失败
+  zh-TW: 截圖失敗
+screenshot_no_frame:
+  en: No frame to capture
+  zh-CN: 当前没有可截图画面
+  zh-TW: 目前沒有可截圖畫面
 drop_hint:
   en: Drop a video file to start
   zh-CN: 拖入视频文件开始播放
@@ -113,12 +109,28 @@ theme_system:
   zh-TW: 跟隨系統
 playback:
   en: Playback
-  zh-CN: 播放
-  zh-TW: 播放
+  zh-CN: 播放设置
+  zh-TW: 播放設定
 seek_step:
   en: Seek Step
   zh-CN: 快进步长
   zh-TW: 快進步長
+playback_mode:
+  en: End Behavior
+  zh-CN: 播放结束
+  zh-TW: 播放結束
+playback_stop_at_end:
+  en: Stop at End
+  zh-CN: 播完暂停
+  zh-TW: 播完暫停
+playback_loop_playlist:
+  en: Loop Playlist
+  zh-CN: 循环播放列表
+  zh-TW: 循環播放清單
+playback_repeat_one:
+  en: Repeat Current
+  zh-CN: 重复当前视频
+  zh-TW: 重複目前影片
 subtitle:
   en: Subtitle
   zh-CN: 字幕

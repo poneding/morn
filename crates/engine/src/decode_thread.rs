@@ -1,4 +1,4 @@
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use media::{MediaError, VideoDecoder, VideoFrame};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +19,7 @@ pub struct DecodeThread {
     rx: Receiver<VideoFrame>,
     seek_tx: Sender<u64>,
     stop: Arc<AtomicBool>,
+    ended: Arc<AtomicBool>,
     hw_active: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
@@ -32,6 +33,8 @@ impl DecodeThread {
         let (seek_tx, seek_rx) = crossbeam_channel::unbounded::<u64>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
+        let ended = Arc::new(AtomicBool::new(false));
+        let ended_thread = ended.clone();
         let hw_active = Arc::new(AtomicBool::new(false));
         let hw_active_t = hw_active.clone();
 
@@ -41,6 +44,7 @@ impl DecodeThread {
                 Ok(d) => d,
                 Err(_) => return,
             };
+            let mut eof = false;
             while !stop_thread.load(Ordering::Relaxed) {
                 // 排空所有待处理 seek 请求, 只保留最后一个并应用一次。
                 let mut pending = None;
@@ -49,16 +53,25 @@ impl DecodeThread {
                 }
                 if let Some(t) = pending {
                     let _ = decoder.seek_ms(t);
+                    ended_thread.store(false, Ordering::Relaxed);
+                    eof = false;
+                }
+                if eof {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
                 }
                 match decoder.next_frame() {
                     Ok(Some(frame)) => {
+                        ended_thread.store(false, Ordering::Relaxed);
                         hw_active_t.store(decoder.observed_hardware(), Ordering::Relaxed);
                         if tx.send(frame).is_err() {
                             break;
                         }
                     }
-                    Ok(None) => break,
-                    Err(_) => break,
+                    Ok(None) | Err(_) => {
+                        ended_thread.store(true, Ordering::Relaxed);
+                        eof = true;
+                    }
                 }
             }
         });
@@ -67,6 +80,7 @@ impl DecodeThread {
             rx,
             seek_tx,
             stop,
+            ended,
             hw_active,
             join: Some(join),
         })
@@ -74,9 +88,19 @@ impl DecodeThread {
 
     /// 阻塞取下一帧; 队列空且线程结束返回 End。
     pub fn recv_frame(&self) -> FramePull {
-        match self.rx.recv() {
-            Ok(f) => FramePull::Frame(f),
-            Err(_) => FramePull::End,
+        loop {
+            match self.rx.recv_timeout(std::time::Duration::from_millis(10)) {
+                Ok(f) => return FramePull::Frame(f),
+                Err(RecvTimeoutError::Disconnected) => return FramePull::End,
+                Err(RecvTimeoutError::Timeout) => {
+                    if self.ended.load(Ordering::Relaxed) {
+                        return FramePull::End;
+                    }
+                    if self.stop.load(Ordering::Relaxed) {
+                        return FramePull::End;
+                    }
+                }
+            }
         }
     }
 

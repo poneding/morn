@@ -3,5 +3,6 @@ mod decode_thread;
 mod player;
 mod timeline;
 pub use decode_thread::{DecodeThread, FramePull};
+pub use persist::PlaybackMode;
 pub use player::Player;
 pub use timeline::Timeline;

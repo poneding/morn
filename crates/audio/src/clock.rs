@@ -5,6 +5,8 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct MasterClock {
     frames_played: Arc<AtomicU64>,
+    anchor_frames: Arc<AtomicU64>,
+    anchor_ms: Arc<AtomicU64>,
     sample_rate: u32,
     rate: Arc<AtomicU32>,
 }
@@ -13,6 +15,8 @@ impl MasterClock {
     pub fn new(sample_rate: u32) -> Self {
         Self {
             frames_played: Arc::new(AtomicU64::new(0)),
+            anchor_frames: Arc::new(AtomicU64::new(0)),
+            anchor_ms: Arc::new(AtomicU64::new(0)),
             sample_rate: sample_rate.max(1),
             rate: Arc::new(AtomicU32::new(100)),
         }
@@ -25,20 +29,28 @@ impl MasterClock {
 
     /// 当前播放位置(毫秒)。
     pub fn position_ms(&self) -> u64 {
-        let f = self.frames_played.load(Ordering::Relaxed);
-        let base = f * 1000 / self.sample_rate as u64;
-        base * self.rate.load(Ordering::Relaxed) as u64 / 100
+        let frames = self.frames_played.load(Ordering::Relaxed);
+        let anchor_frames = self.anchor_frames.load(Ordering::Relaxed);
+        let anchor_ms = self.anchor_ms.load(Ordering::Relaxed);
+        let elapsed_frames = frames.saturating_sub(anchor_frames);
+        let elapsed_ms = elapsed_frames * 1000 / self.sample_rate as u64;
+        anchor_ms + elapsed_ms * self.rate.load(Ordering::Relaxed) as u64 / 100
     }
 
-    /// 设置倍速百分比 (100 = 1.0x)。影响 position_ms 读数(视频帧节奏)。
+    /// 设置倍速百分比 (100 = 1.0x)。保留当前媒体位置, 只影响后续走时。
     pub fn set_rate(&self, pct: u16) {
-        self.rate.store(pct as u32, Ordering::Relaxed);
+        let pos = self.position_ms();
+        let frames = self.frames_played.load(Ordering::Relaxed);
+        self.anchor_ms.store(pos, Ordering::Relaxed);
+        self.anchor_frames.store(frames, Ordering::Relaxed);
+        self.rate.store(pct.max(1) as u32, Ordering::Relaxed);
     }
 
     /// seek 后重置时钟基准。
     pub fn reset_to(&self, ms: u64) {
-        let frames = ms * self.sample_rate as u64 / 1000;
-        self.frames_played.store(frames, Ordering::Relaxed);
+        let frames = self.frames_played.load(Ordering::Relaxed);
+        self.anchor_ms.store(ms, Ordering::Relaxed);
+        self.anchor_frames.store(frames, Ordering::Relaxed);
     }
 }
 
@@ -82,10 +94,31 @@ mod tests {
     }
 
     #[test]
-    fn double_rate_doubles_position() {
+    fn double_rate_affects_future_position() {
         let c = MasterClock::new(1000);
         c.add_frames(1000);
         c.set_rate(200);
+        c.add_frames(500);
         assert_eq!(c.position_ms(), 2000);
+    }
+
+    #[test]
+    fn set_rate_preserves_current_position() {
+        let c = MasterClock::new(1000);
+        c.add_frames(1000);
+        c.set_rate(200);
+        assert_eq!(c.position_ms(), 1000);
+        c.add_frames(500);
+        assert_eq!(c.position_ms(), 2000);
+    }
+
+    #[test]
+    fn reset_to_uses_media_position_at_current_rate() {
+        let c = MasterClock::new(1000);
+        c.set_rate(200);
+        c.reset_to(10_000);
+        assert_eq!(c.position_ms(), 10_000);
+        c.add_frames(500);
+        assert_eq!(c.position_ms(), 11_000);
     }
 }

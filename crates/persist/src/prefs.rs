@@ -2,6 +2,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackMode {
+    #[default]
+    StopAtEnd,
+    LoopPlaylist,
+    RepeatOne,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
@@ -11,6 +20,7 @@ pub struct Preferences {
     pub seek_step_secs: u64,
     pub theme: String,
     pub subtitle_font_size: f32,
+    pub playback_mode: PlaybackMode,
     pub last_playlist: Vec<String>,
     pub last_index: usize,
     pub history: Vec<String>,
@@ -27,6 +37,7 @@ impl Default for Preferences {
             seek_step_secs: 10,
             theme: "system".to_string(),
             subtitle_font_size: 24.0,
+            playback_mode: PlaybackMode::StopAtEnd,
             last_playlist: Vec::new(),
             last_index: 0,
             history: Vec::new(),
@@ -73,6 +84,7 @@ mod tests {
         let p = Preferences::default();
         assert_eq!(p.volume, 100);
         assert_eq!(p.window_size, (1280, 720));
+        assert_eq!(p.playback_mode, PlaybackMode::StopAtEnd);
         assert!(p.resume_point("/any.mp4").is_none());
     }
 
@@ -129,12 +141,14 @@ mod tests {
         p.seek_step_secs = 20;
         p.theme = "dark".into();
         p.subtitle_font_size = 30.0;
+        p.playback_mode = PlaybackMode::RepeatOne;
         p.save(&path).unwrap();
         let loaded = Preferences::load(&path).unwrap();
         assert_eq!(loaded.language, "zh-TW");
         assert_eq!(loaded.seek_step_secs, 20);
         assert_eq!(loaded.theme, "dark");
         assert_eq!(loaded.subtitle_font_size, 30.0);
+        assert_eq!(loaded.playback_mode, PlaybackMode::RepeatOne);
     }
 
     #[test]
@@ -144,6 +158,7 @@ mod tests {
         assert_eq!(p.seek_step_secs, 10);
         assert_eq!(p.theme, "system");
         assert_eq!(p.subtitle_font_size, 24.0);
+        assert_eq!(p.playback_mode, PlaybackMode::StopAtEnd);
     }
 
     #[test]

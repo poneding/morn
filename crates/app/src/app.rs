@@ -10,12 +10,24 @@ enum SidebarTab {
     History,
 }
 
+pub const APP_MIN_WIDTH: f32 = 920.0;
+pub const APP_MIN_HEIGHT: f32 = 560.0;
+pub const VIDEO_MIN_WIDTH: f32 = 640.0;
+pub const PLAYLIST_TOGGLE_ICON: &str = "☰";
+
+struct ScreenshotNotice {
+    message: String,
+    created: std::time::Instant,
+    pos: egui::Pos2,
+}
+
 pub struct PlayerApp {
     player: Player,
     video_view: VideoView,
-    rate_pct: u16,
     show_settings: bool,
+    show_playlist: bool,
     sidebar_tab: SidebarTab,
+    screenshot_notice: Option<ScreenshotNotice>,
 }
 
 impl PlayerApp {
@@ -24,9 +36,61 @@ impl PlayerApp {
         Self {
             player: Player::with_prefs(prefs_path()),
             video_view: VideoView::new(),
-            rate_pct: 100,
             show_settings: false,
+            show_playlist: true,
             sidebar_tab: SidebarTab::Playlist,
+            screenshot_notice: None,
+        }
+    }
+
+    fn show_screenshot_notice(&mut self, ctx: &egui::Context) {
+        let Some(notice) = &self.screenshot_notice else {
+            return;
+        };
+        if notice.created.elapsed() > std::time::Duration::from_secs(3) {
+            self.screenshot_notice = None;
+            return;
+        }
+        let message = notice.message.clone();
+        let pos = notice.pos;
+        egui::Area::new(egui::Id::new("screenshot_notice"))
+            .fixed_pos(pos)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(420.0);
+                    ui.label(message);
+                });
+            });
+    }
+
+    fn set_screenshot_notice(&mut self, message: String, notice_pos: egui::Pos2) {
+        self.screenshot_notice = Some(ScreenshotNotice {
+            message,
+            created: std::time::Instant::now(),
+            pos: notice_pos,
+        });
+    }
+
+    fn handle_command(&mut self, cmd: player_core::Command) {
+        match cmd {
+            player_core::Command::OpenDialog => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter(
+                        t!("video_filter").to_string(),
+                        &["mp4", "mkv", "webm", "mov", "avi"],
+                    )
+                    .pick_file()
+                {
+                    self.player.handle(player_core::Command::Open(path));
+                }
+            }
+            player_core::Command::OpenFolder => {
+                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    self.player.open_folder(&dir);
+                }
+            }
+            _ => self.player.handle(cmd),
         }
     }
 }
@@ -41,6 +105,12 @@ fn theme_preference(s: &str) -> egui::ThemePreference {
         "light" => egui::ThemePreference::Light,
         _ => egui::ThemePreference::System,
     }
+}
+
+fn playlist_toggle_button(ui: &mut egui::Ui, show_playlist: bool) -> bool {
+    ui.add(egui::Button::new(PLAYLIST_TOGGLE_ICON).selected(show_playlist))
+        .on_hover_text(t!("playlist").to_string())
+        .clicked()
 }
 
 impl eframe::App for PlayerApp {
@@ -67,7 +137,6 @@ impl eframe::App for PlayerApp {
         }
 
         self.player.tick();
-
         let t = self.player.timeline();
 
         // 键盘快捷键: 空格=播放/暂停, ↑↓=音量(吸附5), ←→=按步长 seek。
@@ -112,107 +181,187 @@ impl eframe::App for PlayerApp {
             }
         }
 
+        let mut bottom_commands = Vec::new();
+        let mut screenshot_notice_pos = None;
+        let mut toggle_settings = false;
+        let mut toggle_playlist = false;
+        let tracks = self.player.subtitle_tracks().to_vec();
         egui::Panel::bottom("controls").show_inside(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for cmd in controls::controls_bar(ui, &t) {
-                    if let player_core::Command::OpenDialog = cmd {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter(
-                                t!("video_filter").to_string(),
-                                &["mp4", "mkv", "webm", "mov", "avi"],
-                            )
-                            .pick_file()
-                        {
-                            self.player.handle(player_core::Command::Open(path));
-                        }
-                    } else {
-                        self.player.handle(cmd);
-                    }
-                }
-                if ui
-                    .button("📁")
-                    .on_hover_text(t!("open_folder").to_string())
-                    .clicked()
-                {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        self.player.open_folder(&dir);
-                    }
-                }
-                let actions = crate::enhance::enhance_bar(ui, self.rate_pct);
-                for cmd in actions.commands {
-                    if let player_core::Command::SetRate(p) = cmd {
-                        self.rate_pct = p;
-                    }
-                    self.player.handle(cmd);
-                }
-                if actions.screenshot {
-                    if let Some((rgba, w, h)) = self.video_view.last_frame() {
-                        match crate::enhance::save_screenshot(rgba, w, h) {
-                            Ok(p) => eprintln!("截图已保存: {}", p.display()),
-                            Err(e) => eprintln!("截图失败: {e}"),
-                        }
-                    }
-                }
-                let tracks = self.player.subtitle_tracks().to_vec();
-                if !tracks.is_empty() {
-                    if let Some(cmd) = controls::subtitle_track_combo(ui, &tracks) {
-                        self.player.handle(cmd);
-                    }
-                }
-                if ui
-                    .button("⚙")
-                    .on_hover_text(t!("settings").to_string())
-                    .clicked()
-                {
-                    self.show_settings = !self.show_settings;
-                }
-            });
-        });
+            egui::containers::Sides::new().shrink_left().show(
+                ui,
+                |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        bottom_commands.extend(controls::controls_bar(ui, &t));
 
-        egui::Panel::left("playlist")
-            .default_size(200.0)
-            .show_inside(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(
-                        &mut self.sidebar_tab,
-                        SidebarTab::Playlist,
-                        t!("playlist").to_string(),
-                    );
-                    ui.selectable_value(
-                        &mut self.sidebar_tab,
-                        SidebarTab::History,
-                        t!("history").to_string(),
-                    );
+                        let actions = crate::enhance::enhance_bar(ui, t.rate_pct);
+                        bottom_commands.extend(actions.commands);
+                        if actions.screenshot {
+                            screenshot_notice_pos = Some(
+                                actions
+                                    .screenshot_notice_pos
+                                    .unwrap_or(egui::pos2(16.0, 16.0)),
+                            );
+                        }
+
+                        if !tracks.is_empty() {
+                            if let Some(cmd) = controls::subtitle_track_combo(ui, &tracks) {
+                                bottom_commands.push(cmd);
+                            }
+                        }
+                    });
+                },
+                |ui| {
+                    if ui
+                        .button("⚙")
+                        .on_hover_text(t!("settings").to_string())
+                        .clicked()
+                    {
+                        toggle_settings = true;
+                    }
+                    if playlist_toggle_button(ui, self.show_playlist) {
+                        toggle_playlist = true;
+                    }
+                },
+            );
+        });
+        if toggle_playlist {
+            self.show_playlist = !self.show_playlist;
+        }
+        if toggle_settings {
+            self.show_settings = !self.show_settings;
+        }
+        for cmd in bottom_commands {
+            self.handle_command(cmd);
+        }
+        if let Some(notice_pos) = screenshot_notice_pos {
+            if let Some((rgba, w, h)) = self.video_view.last_frame() {
+                match crate::enhance::save_screenshot(rgba, w, h) {
+                    Ok(p) => {
+                        eprintln!("截图已保存: {}", p.display());
+                        self.set_screenshot_notice(
+                            format!("{}: {}", t!("screenshot_saved"), p.display()),
+                            notice_pos,
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("截图失败: {e}");
+                        self.set_screenshot_notice(
+                            format!("{}: {e}", t!("screenshot_failed")),
+                            notice_pos,
+                        );
+                    }
+                }
+            } else {
+                self.set_screenshot_notice(t!("screenshot_no_frame").to_string(), notice_pos);
+            }
+        }
+
+        if self.show_playlist {
+            egui::Panel::right("playlist")
+                .default_size(240.0)
+                .min_size(crate::playlist_panel::PLAYLIST_MIN_WIDTH)
+                .show_inside(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for cmd in crate::playlist_panel::open_menu_button(ui) {
+                            self.handle_command(cmd);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.selectable_value(
+                                &mut self.sidebar_tab,
+                                SidebarTab::History,
+                                t!("history").to_string(),
+                            );
+                            ui.selectable_value(
+                                &mut self.sidebar_tab,
+                                SidebarTab::Playlist,
+                                t!("playlist").to_string(),
+                            );
+                        });
+                    });
+                    ui.separator();
+                    match self.sidebar_tab {
+                        SidebarTab::Playlist => {
+                            let paths = self.player.playlist_paths();
+                            let cur = self.player.current_index();
+                            for cmd in crate::playlist_panel::playlist_panel(ui, &paths, cur) {
+                                self.handle_command(cmd);
+                            }
+                        }
+                        SidebarTab::History => {
+                            let hist: Vec<std::path::PathBuf> =
+                                self.player.history().iter().map(Into::into).collect();
+                            if let Some(cmd) = crate::playlist_panel::history_panel(ui, &hist) {
+                                self.handle_command(cmd);
+                            }
+                        }
+                    }
                 });
-                ui.separator();
-                match self.sidebar_tab {
-                    SidebarTab::Playlist => {
-                        let paths = self.player.playlist_paths();
-                        let cur = self.player.current_index();
-                        for cmd in crate::playlist_panel::playlist_panel(ui, &paths, cur) {
-                            self.player.handle(cmd);
-                        }
-                    }
-                    SidebarTab::History => {
-                        let hist: Vec<std::path::PathBuf> =
-                            self.player.history().iter().map(Into::into).collect();
-                        if let Some(cmd) = crate::playlist_panel::history_panel(ui, &hist) {
-                            self.player.handle(cmd);
-                        }
-                    }
-                }
-            });
+        }
 
+        let mut video_commands = Vec::new();
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            self.video_view.show(ui, frame, &self.player);
+            ui.set_min_width(VIDEO_MIN_WIDTH);
+            video_commands = self.video_view.show(ui, frame, &self.player);
         });
+        for cmd in video_commands {
+            self.handle_command(cmd);
+        }
 
         crate::settings::settings_window(&ctx, &mut self.show_settings, &mut self.player);
+        self.show_screenshot_notice(&ctx);
 
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         self.player.save_state();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn app_width_budget_preserves_sidebar_and_video_minimums() {
+        let app_min_width = std::hint::black_box(super::APP_MIN_WIDTH);
+        let playlist_min_width = std::hint::black_box(crate::playlist_panel::PLAYLIST_MIN_WIDTH);
+        let video_min_width = std::hint::black_box(super::VIDEO_MIN_WIDTH);
+        assert!(
+            app_min_width >= playlist_min_width + video_min_width,
+            "app minimum width must preserve sidebar and video minimums"
+        );
+    }
+
+    #[test]
+    fn screenshot_notice_is_near_button_and_includes_path() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+        assert!(!source.contains("Align2::RIGHT_BOTTOM"));
+        assert!(source.contains("notice_pos"));
+        assert!(source.contains("p.display()"));
+    }
+
+    #[test]
+    fn playlist_panel_is_right_side_and_toggleable_from_bottom_bar() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+
+        assert!(source.contains("show_playlist"));
+        assert!(source.contains("Panel::right(\"playlist\")"));
+        assert!(!source.contains("Panel::left(\"playlist\")"));
+        assert!(source.contains("playlist_toggle_button"));
+        assert!(source.contains("Sides::new().shrink_left()"));
+        assert!(source.contains("self.show_playlist = !self.show_playlist"));
+    }
+
+    #[test]
+    fn settings_button_is_right_of_playlist_toggle() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+        let settings_idx = source.find(".button(\"⚙\")").unwrap();
+        let playlist_idx = source
+            .find("playlist_toggle_button(ui, self.show_playlist)")
+            .unwrap();
+
+        assert!(
+            settings_idx < playlist_idx,
+            "right-to-left bottom controls draw the first button at the far right"
+        );
     }
 }

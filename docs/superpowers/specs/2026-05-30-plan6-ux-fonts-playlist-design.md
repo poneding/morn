@@ -24,7 +24,7 @@
 - **B. 播放列表 vs 历史(用户明确)**: 引入**两个独立概念** —
   - **当前播放列表 (Playlist)**: 始终代表"当前视频所在目录"。打开/拖入一个视频 → 自动替换为该目录的视频; "打开文件夹" → 设为该目录。是临时工作队列。
   - **播放历史 (History)**: **独立持久化**的"最近播放过的视频"列表(最近优先、去重、上限 ~50), 与播放列表隔离。每次打开一个视频就记入历史(续播位置复用已有 resume_points)。点击历史项 → 打开它(于是播放列表变成它的目录)。
-- **历史 UI**: 左侧栏顶部加 **"列表 / 历史" 切换(tab)**, 同一区域切换显示当前播放列表或历史。
+- **历史 UI**: 右侧栏顶部加 **"列表 / 历史" 切换(tab)**, 同一区域切换显示当前播放列表或历史。
 
 ## 关键事实(已对照本机/已装 crate 验证)
 
@@ -58,7 +58,7 @@ macOS 的 `UI_FONTS` 候选改为 `["/System/Library/Fonts/HelveticaNeue.ttc", "
 - `Player::handle(Command::Open(path))` 改为: `let vids = sibling_videos(&path); playlist.set_items(vids, index_of(path)); self.open(&path);`(替换 — 判断点 B 默认)。
 - 新增 `player_core::Command::OpenFolder`(单元变体 + 测试)。`app` 层拦截(像 OpenDialog 一样): `rfd::FileDialog::new().pick_folder()` → 若选中, 扫描该目录视频 → `player.handle_open_folder(dir)`(engine 加方法: set_items(scan(dir), 0) 并 open 第一个; 空目录则忽略)。
 - 控制栏/设置区加"打开文件夹"按钮(📁)发 `OpenFolder`。
-- **侧栏 列表/历史 切换**: `PlayerApp` 加 `sidebar_tab: SidebarTab { Playlist, History }`(默认 Playlist)。左侧 `SidePanel` 顶部用 `ui.selectable_value` 画两个 tab(`t!("playlist")` / `t!("history")`); 选中 Playlist 时画现有 `playlist_panel`, 选中 History 时画历史列表(`player.history()`, 每项 `selectable_label(false, 文件名)`, 点击发 `Command::Open(path)` → 打开并把播放列表设为其目录)。历史项可显示完整路径作 hover。
+- **右侧栏 列表/历史 切换**: `PlayerApp` 加 `sidebar_tab: SidebarTab { Playlist, History }`(默认 Playlist)。右侧 `SidePanel` 顶部用 `ui.selectable_value` 画两个 tab(`t!("playlist")` / `t!("history")`); 选中 Playlist 时画现有 `playlist_panel`, 选中 History 时画历史列表(`player.history()`, 每项 `selectable_label(false, 文件名)`, 点击发 `Command::Open(path)` → 打开并把播放列表设为其目录)。历史项可显示完整路径作 hover。
 
 ### 5. 控制栏单行自动换行 (`crates/app/src/controls.rs`, `enhance.rs`, `app.rs`)
 - 把底部面板内的 `controls_bar` + `enhance_bar` + 字幕轨 combo + ⚙ 合并到**一个 `ui.horizontal_wrapped(|ui| {...})`** 中, 窗口窄时自动换行。

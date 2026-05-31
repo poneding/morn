@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 280" role="img" aria-labelledby="title desc">
+  <title id="title">Morn centered sunrise play logo</title>
+  <desc id="desc">A centered gradient sun with a centered play triangle on a dark rounded square background.</desc>
+  <defs>
+    <linearGradient id="bg" x1="42" y1="32" x2="238" y2="248" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#182234"/>
+      <stop offset="0.58" stop-color="#0F1724"/>
+      <stop offset="1" stop-color="#070A10"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="86" y1="76" x2="194" y2="204" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF6BE"/>
+      <stop offset="0.36" stop-color="#FFD568"/>
+      <stop offset="0.68" stop-color="#FF9558"/>
+      <stop offset="1" stop-color="#FF625C"/>
+    </linearGradient>
+  </defs>
+  <rect x="36" y="36" width="208" height="208" rx="48" fill="url(#bg)"/>
+  <circle cx="140" cy="140" r="78" fill="url(#sun)"/>
+  <path d="M112 103c0-6 7-10 12-6l58 36c5 3 5 11 0 14l-58 36c-5 4-12 0-12-6z" fill="#111824"/>
+</svg>
