@@ -49,17 +49,10 @@ fn empty_state_contents(ui: &mut egui::Ui, commands: &mut Vec<Command>) {
     });
 }
 
-fn empty_state_content_size(ui: &mut egui::Ui) -> egui::Vec2 {
-    let mut sizing_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(ui.max_rect())
-            .layout(egui::Layout::top_down(egui::Align::Center))
-            .sizing_pass()
-            .invisible(),
-    );
-    let mut ignored = Vec::new();
-    empty_state_contents(&mut sizing_ui, &mut ignored);
-    sizing_ui.min_size()
+fn empty_state_top_padding(ui: &egui::Ui) -> f32 {
+    let spacing = ui.spacing();
+    let content_height = spacing.interact_size.y * 3.0 + spacing.item_spacing.y * 2.0 + 8.0;
+    ((ui.available_height() - content_height) * 0.5).max(0.0)
 }
 
 fn empty_state(ui: &mut egui::Ui) -> Vec<Command> {
@@ -68,15 +61,8 @@ fn empty_state(ui: &mut egui::Ui) -> Vec<Command> {
         ui.available_size(),
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
-            let content_size = empty_state_content_size(ui);
-            let content_rect =
-                egui::Align2::CENTER_CENTER.align_size_within_rect(content_size, ui.max_rect());
-            let mut content_ui = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(content_rect)
-                    .layout(egui::Layout::top_down(egui::Align::Center)),
-            );
-            empty_state_contents(&mut content_ui, &mut commands);
+            ui.add_space(empty_state_top_padding(ui));
+            empty_state_contents(ui, &mut commands);
         },
     );
     commands
@@ -357,14 +343,29 @@ mod tests {
             .unwrap();
 
         assert!(source.contains("fn empty_state"));
-        assert!(source.contains("available_size()"));
-        assert!(source.contains("allocate_ui_with_layout"));
-        assert!(source.contains("sizing_pass()"));
-        assert!(source.contains("Align2::CENTER_CENTER"));
+        assert!(source.contains("empty_state_top_padding"));
+        assert!(source.contains("ui.add_space(empty_state_top_padding(ui))"));
         assert!(source.contains("vertical_centered"));
         assert!(
             !source.contains("ui.horizontal("),
             "empty state actions should be individually centered, not left-aligned in a full-width row"
+        );
+    }
+
+    #[test]
+    fn empty_state_avoids_extra_sizing_pass_during_resize() {
+        let source = include_str!("video_view.rs")
+            .split("/// 持有 wgpu")
+            .next()
+            .unwrap();
+
+        assert!(
+            !source.contains("sizing_pass()"),
+            "empty state should not do hidden measurement every frame"
+        );
+        assert!(
+            !source.contains("empty_state_content_size"),
+            "empty state should use a single layout pass"
         );
     }
 }

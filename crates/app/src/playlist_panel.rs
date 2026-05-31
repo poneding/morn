@@ -3,7 +3,6 @@ use player_core::Command;
 use rust_i18n::t;
 
 pub const OPEN_MENU_ICON: &str = "➕";
-pub const OPEN_MENU_BUTTON_SIZE: f32 = 28.0;
 pub const PLAYLIST_MIN_WIDTH: f32 = 220.0;
 
 pub fn open_menu_commands() -> Vec<Command> {
@@ -12,10 +11,7 @@ pub fn open_menu_commands() -> Vec<Command> {
 
 pub fn open_menu_button(ui: &mut egui::Ui) -> Vec<Command> {
     let mut cmds = Vec::new();
-    let button = egui::containers::menu::MenuButton::from_button(
-        egui::Button::new(OPEN_MENU_ICON)
-            .min_size(egui::vec2(OPEN_MENU_BUTTON_SIZE, OPEN_MENU_BUTTON_SIZE)),
-    );
+    let button = egui::containers::menu::MenuButton::from_button(egui::Button::new(OPEN_MENU_ICON));
     let (_, menu) = button.ui(ui, |ui| {
         let mut selected = Vec::new();
         for cmd in open_menu_commands() {
@@ -111,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn open_menu_uses_sized_icon_button() {
+    fn open_menu_uses_default_sized_icon_button() {
         assert_eq!(super::OPEN_MENU_ICON, "➕");
 
         let source = include_str!("playlist_panel.rs")
@@ -119,8 +115,8 @@ mod tests {
             .next()
             .unwrap();
         assert!(!source.contains("menu_button(\"+\")"));
-        assert!(source.contains("OPEN_MENU_BUTTON_SIZE"));
-        assert!(source.contains("min_size"));
+        assert!(!source.contains("OPEN_MENU_BUTTON_SIZE"));
+        assert!(!source.contains("min_size"));
         assert!(source.contains("MenuButton"));
     }
 

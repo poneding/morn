@@ -113,6 +113,34 @@ fn playlist_toggle_button(ui: &mut egui::Ui, show_playlist: bool) -> bool {
         .clicked()
 }
 
+fn playlist_max_width(available_width: f32) -> f32 {
+    (available_width - VIDEO_MIN_WIDTH).max(crate::playlist_panel::PLAYLIST_MIN_WIDTH)
+}
+
+fn should_request_continuous_repaint(
+    t: &engine::Timeline,
+    screenshot_notice_visible: bool,
+) -> bool {
+    t.state == player_core::PlaybackState::Playing || screenshot_notice_visible
+}
+
+fn navigation_shortcut_command(
+    modifiers: egui::Modifiers,
+    left_pressed: bool,
+    right_pressed: bool,
+) -> Option<player_core::Command> {
+    if !modifiers.command {
+        return None;
+    }
+    if left_pressed {
+        Some(player_core::Command::Prev)
+    } else if right_pressed {
+        Some(player_core::Command::Next)
+    } else {
+        None
+    }
+}
+
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -149,6 +177,7 @@ impl eframe::App for PlayerApp {
             let down = ctx.input(|i| i.key_pressed(egui::Key::ArrowDown));
             let left = ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
             let right = ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
+            let modifiers = ctx.input(|i| i.modifiers);
             if space {
                 self.player
                     .handle(if t.state == player_core::PlaybackState::Playing {
@@ -167,11 +196,12 @@ impl eframe::App for PlayerApp {
                     crate::shortcuts::snap_volume_down(t.volume),
                 ));
             }
-            if left {
+            if let Some(cmd) = navigation_shortcut_command(modifiers, left, right) {
+                self.player.handle(cmd);
+            } else if left {
                 self.player
                     .handle(player_core::Command::SeekTo(pos.saturating_sub(step_ms)));
-            }
-            if right {
+            } else if right {
                 let target = if dur > 0 {
                     (pos + step_ms).min(dur)
                 } else {
@@ -257,9 +287,11 @@ impl eframe::App for PlayerApp {
         }
 
         if self.show_playlist {
+            let playlist_max_width = playlist_max_width(ui.available_width());
             egui::Panel::right("playlist")
                 .default_size(240.0)
                 .min_size(crate::playlist_panel::PLAYLIST_MIN_WIDTH)
+                .max_size(playlist_max_width)
                 .show_inside(ui, |ui| {
                     ui.horizontal(|ui| {
                         for cmd in crate::playlist_panel::open_menu_button(ui) {
@@ -310,7 +342,12 @@ impl eframe::App for PlayerApp {
         crate::settings::settings_window(&ctx, &mut self.show_settings, &mut self.player);
         self.show_screenshot_notice(&ctx);
 
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        if should_request_continuous_repaint(
+            &self.player.timeline(),
+            self.screenshot_notice.is_some(),
+        ) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -329,6 +366,21 @@ mod tests {
             app_min_width >= playlist_min_width + video_min_width,
             "app minimum width must preserve sidebar and video minimums"
         );
+    }
+
+    #[test]
+    fn playlist_width_is_capped_to_preserve_video_minimum() {
+        assert_eq!(
+            super::playlist_max_width(super::APP_MIN_WIDTH),
+            super::APP_MIN_WIDTH - super::VIDEO_MIN_WIDTH
+        );
+        assert_eq!(
+            super::playlist_max_width(800.0),
+            crate::playlist_panel::PLAYLIST_MIN_WIDTH
+        );
+
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+        assert!(source.contains(".max_size(playlist_max_width"));
     }
 
     #[test]
@@ -362,6 +414,48 @@ mod tests {
         assert!(
             settings_idx < playlist_idx,
             "right-to-left bottom controls draw the first button at the far right"
+        );
+    }
+
+    #[test]
+    fn continuous_repaint_is_only_requested_when_needed() {
+        let mut stopped = engine::Timeline {
+            position_ms: 0,
+            duration_ms: 0,
+            state: player_core::PlaybackState::Stopped,
+            volume: 100,
+            rate_pct: 100,
+            muted: false,
+        };
+        assert!(!super::should_request_continuous_repaint(&stopped, false));
+        assert!(super::should_request_continuous_repaint(&stopped, true));
+
+        stopped.state = player_core::PlaybackState::Playing;
+        assert!(super::should_request_continuous_repaint(&stopped, false));
+
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+        assert!(source.contains("if should_request_continuous_repaint"));
+        assert!(source.contains("ctx.request_repaint_after"));
+        assert!(source.contains("should_request_continuous_repaint"));
+    }
+
+    #[test]
+    fn command_or_ctrl_arrows_navigate_playlist() {
+        let command = egui::Modifiers {
+            command: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::navigation_shortcut_command(command, true, false),
+            Some(player_core::Command::Prev)
+        );
+        assert_eq!(
+            super::navigation_shortcut_command(command, false, true),
+            Some(player_core::Command::Next)
+        );
+        assert_eq!(
+            super::navigation_shortcut_command(Default::default(), false, true),
+            None
         );
     }
 }

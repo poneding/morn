@@ -10,8 +10,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
         .show(ctx, |ui| {
             // 外观
             ui.heading(t!("appearance").to_string());
-            ui.horizontal(|ui| {
-                ui.label(t!("language").to_string());
+            settings_row(ui, t!("language").to_string(), |ui| {
                 let mut lang = player.prefs().language.clone();
                 egui::ComboBox::from_id_salt("lang")
                     .selected_text(lang_label(&lang))
@@ -28,8 +27,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                     player.set_language(&lang);
                 }
             });
-            ui.horizontal(|ui| {
-                ui.label(t!("theme").to_string());
+            settings_row(ui, t!("theme").to_string(), |ui| {
                 let mut theme = player.prefs().theme.clone();
                 egui::ComboBox::from_id_salt("theme")
                     .selected_text(theme_label(&theme))
@@ -57,8 +55,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
             ui.separator();
             // 播放
             ui.heading(t!("playback").to_string());
-            ui.horizontal(|ui| {
-                ui.label(t!("seek_step").to_string());
+            settings_row(ui, t!("seek_step").to_string(), |ui| {
                 let mut step = player.prefs().seek_step_secs;
                 egui::ComboBox::from_id_salt("seek_step")
                     .selected_text(format!("{} {}", step, t!("seconds")))
@@ -71,8 +68,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                     player.set_seek_step(step);
                 }
             });
-            ui.horizontal(|ui| {
-                ui.label(t!("playback_mode").to_string());
+            settings_row(ui, t!("playback_mode").to_string(), |ui| {
                 let mut mode = player.prefs().playback_mode;
                 egui::ComboBox::from_id_salt("playback_mode")
                     .selected_text(playback_mode_label(mode))
@@ -100,14 +96,22 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
             ui.separator();
             // 字幕
             ui.heading(t!("subtitle").to_string());
-            ui.horizontal(|ui| {
-                ui.label(t!("subtitle_size").to_string());
+            settings_row(ui, t!("subtitle_size").to_string(), |ui| {
                 let mut size = player.prefs().subtitle_font_size;
                 if ui.add(egui::Slider::new(&mut size, 12.0..=48.0)).changed() {
                     player.set_subtitle_font_size(size);
                 }
             });
         });
+}
+
+fn settings_row(ui: &mut egui::Ui, label: String, add_value: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            add_value(ui);
+        });
+    });
 }
 
 fn lang_label(code: &str) -> &'static str {
@@ -145,5 +149,17 @@ mod tests {
         assert!(source.contains("playback_mode"));
         assert!(source.contains("LoopPlaylist"));
         assert!(source.contains("RepeatOne"));
+    }
+
+    #[test]
+    fn settings_rows_keep_labels_left_and_values_right() {
+        let source = include_str!("settings.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("fn settings_row"));
+        assert!(source.contains("right_to_left(egui::Align::Center)"));
+        assert!(!source.contains("ui.horizontal(|ui| {\n                ui.label(t!(\"language\")"));
     }
 }
