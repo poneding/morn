@@ -2,6 +2,8 @@ mod app;
 mod controls;
 mod enhance;
 mod font;
+#[cfg(target_os = "macos")]
+mod macos;
 mod playlist_panel;
 mod settings;
 mod shortcuts;
@@ -13,6 +15,9 @@ rust_i18n::i18n!("locales", fallback = "en");
 use app::{PlayerApp, APP_MIN_HEIGHT, APP_MIN_WIDTH};
 
 fn main() -> eframe::Result {
+    #[cfg(target_os = "macos")]
+    macos::install_about_metadata(env!("CARGO_PKG_VERSION"));
+
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([960.0, 600.0])
@@ -32,4 +37,20 @@ fn main() -> eframe::Result {
 fn app_icon() -> eframe::egui::IconData {
     eframe::icon_data::from_png_bytes(include_bytes!("../assets/icons/morn-logo-256.png"))
         .expect("embedded app icon should be a valid PNG")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn startup_installs_macos_about_metadata_from_package_version() {
+        let source = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("macos::install_about_metadata(env!(\"CARGO_PKG_VERSION\"))"));
+        assert!(
+            source.find("install_about_metadata").unwrap() < source.find("run_native").unwrap()
+        );
+    }
 }
