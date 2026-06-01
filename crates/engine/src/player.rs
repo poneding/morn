@@ -32,6 +32,7 @@ pub struct Player {
     prefs: persist::Preferences,
     prefs_path: std::path::PathBuf,
     playback_ended: bool,
+    fallback_position_ms: u64,
 }
 
 impl Player {
@@ -57,6 +58,7 @@ impl Player {
             prefs: persist::Preferences::default(),
             prefs_path: std::path::PathBuf::new(),
             playback_ended: false,
+            fallback_position_ms: 0,
         }
     }
 
@@ -81,6 +83,24 @@ impl Player {
     pub fn prefs(&self) -> &persist::Preferences {
         &self.prefs
     }
+
+    /// 启动时恢复上次选中的视频, seek 到记忆进度后保持暂停。
+    pub fn restore_last_session_paused(&mut self) -> bool {
+        let Some(path) = self.playlist.current().map(|p| p.to_path_buf()) else {
+            return false;
+        };
+        if !path.is_file() || !is_video_ext(&path) {
+            return false;
+        }
+
+        self.open(&path);
+        if self.video.is_none() {
+            return false;
+        }
+        self.pause_playback();
+        true
+    }
+
     pub fn set_language(&mut self, v: &str) {
         self.prefs.language = v.to_string();
     }
@@ -96,6 +116,15 @@ impl Player {
     pub fn set_playback_mode(&mut self, mode: persist::PlaybackMode) {
         self.prefs.playback_mode = mode;
     }
+    pub fn set_check_updates_on_startup(&mut self, enabled: bool) {
+        self.prefs.check_updates_on_startup = enabled;
+        if !enabled {
+            self.prefs.check_beta_updates = false;
+        }
+    }
+    pub fn set_check_beta_updates(&mut self, enabled: bool) {
+        self.prefs.check_beta_updates = enabled && self.prefs.check_updates_on_startup;
+    }
     pub fn set_screenshot_dir(&mut self, path: &str) {
         self.prefs.screenshot_dir = path.to_string();
     }
@@ -104,7 +133,7 @@ impl Player {
         self.audio_out
             .as_ref()
             .map(|a| a.clock.position_ms())
-            .unwrap_or(0)
+            .unwrap_or(self.fallback_position_ms)
     }
 
     pub fn timeline(&self) -> Timeline {
@@ -180,6 +209,7 @@ impl Player {
         } else {
             ms
         };
+        self.fallback_position_ms = target;
         self.playback_ended = false;
         if let Some(v) = &self.video {
             v.request_seek(target);
@@ -191,6 +221,14 @@ impl Player {
         self.audio_flush.store(true, Ordering::Relaxed);
         if let Some(a) = &self.audio_out {
             a.clock.reset_to(target);
+        }
+    }
+
+    fn pause_playback(&mut self) {
+        if self.machine.apply(player_core::Transition::Pause).is_ok() {
+            if let Some(a) = &self.audio_out {
+                a.pause();
+            }
         }
     }
 
@@ -250,11 +288,7 @@ impl Player {
                 }
             }
             Command::Pause => {
-                if self.machine.apply(player_core::Transition::Pause).is_ok() {
-                    if let Some(a) = &self.audio_out {
-                        a.pause();
-                    }
-                }
+                self.pause_playback();
             }
             Command::Stop => {
                 let _ = self.machine.apply(player_core::Transition::Stop);
@@ -342,6 +376,7 @@ impl Player {
     fn open(&mut self, path: &Path) {
         self.teardown();
         self.playback_ended = false;
+        self.fallback_position_ms = 0;
 
         let video = match DecodeThread::spawn(path, 16) {
             Ok(v) => v,
@@ -434,18 +469,11 @@ impl Player {
         self.sub_tracks = media::list_subtitle_tracks(path).unwrap_or_default();
         let _ = self.machine.apply(player_core::Transition::Play);
 
-        // 续播: 若该文件记录了有意义的进度(>3s), 打开后直接 seek 到该位置。
+        // 续播: 若该文件记录了进度, 打开后直接 seek 到该位置。
         let key = path.to_string_lossy().to_string();
         if let Some(ms) = self.prefs.resume_point(&key) {
-            if ms > 3000 {
-                if let Some(v) = &self.video {
-                    v.request_seek(ms);
-                }
-                self.audio_seek.store(ms, Ordering::Relaxed);
-                self.audio_flush.store(true, Ordering::Relaxed);
-                if let Some(a) = &self.audio_out {
-                    a.clock.reset_to(ms);
-                }
+            if ms > 0 {
+                self.seek_to(ms);
             }
         }
     }
@@ -461,9 +489,16 @@ impl Player {
             v.stop();
         }
         self.duration_ms = 0;
+        self.fallback_position_ms = 0;
         self.audio_stop = Arc::new(AtomicBool::new(false));
         self.audio_seek = Arc::new(AtomicU64::new(u64::MAX));
         self.audio_flush = Arc::new(AtomicBool::new(false));
+    }
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        self.teardown();
     }
 }
 
@@ -612,13 +647,24 @@ mod tests {
         p.set_theme("dark");
         p.set_subtitle_font_size(32.0);
         p.set_playback_mode(persist::PlaybackMode::LoopPlaylist);
+        p.set_check_updates_on_startup(true);
+        p.set_check_beta_updates(true);
         p.set_screenshot_dir("/tmp/morn-shots");
         assert_eq!(p.prefs().seek_step_secs, 20);
         assert_eq!(p.prefs().language, "en");
         assert_eq!(p.prefs().theme, "dark");
         assert_eq!(p.prefs().subtitle_font_size, 32.0);
         assert_eq!(p.prefs().playback_mode, persist::PlaybackMode::LoopPlaylist);
+        assert!(p.prefs().check_updates_on_startup);
+        assert!(p.prefs().check_beta_updates);
         assert_eq!(p.prefs().screenshot_dir, "/tmp/morn-shots");
+
+        p.set_check_updates_on_startup(false);
+        assert!(!p.prefs().check_updates_on_startup);
+        assert!(
+            !p.prefs().check_beta_updates,
+            "beta updates cannot stay enabled when startup checks are disabled"
+        );
     }
 
     #[test]
@@ -687,5 +733,43 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["a.mp4", "b.mp4", "c.mkv"]);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restore_last_session_opens_last_video_paused_at_resume_point() {
+        let video = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let dir = std::env::temp_dir().join(format!(
+            "morn_restore_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefs_path = dir.join("prefs.json");
+        let key = video.to_string_lossy().to_string();
+        let mut prefs = persist::Preferences::default();
+        prefs.last_playlist = vec![key.clone()];
+        prefs.last_index = 0;
+        prefs.set_resume_point(&key, 500);
+        prefs.save(&prefs_path).unwrap();
+
+        let mut player = Player::with_prefs(prefs_path);
+        assert!(player.restore_last_session_paused());
+
+        let timeline = player.timeline();
+        assert_eq!(timeline.state, PlaybackState::Paused);
+        assert!(
+            (500..=800).contains(&timeline.position_ms),
+            "expected restore near 500ms, got {}",
+            timeline.position_ms
+        );
+
+        player.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
     }
 }

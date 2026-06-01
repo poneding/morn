@@ -73,13 +73,14 @@ impl AudioOutput {
     ///
     /// `volume`(0..=100)在回调里按播放时刻施加增益(而非解码时), 故音量改动近乎即时生效。
     /// `flush` 置位时回调清空环形缓冲里的陈旧样本(seek 后丢弃旧音频), 由回调复位。
-    pub fn start(
-        volume: Arc<AtomicU8>,
-        flush: Arc<AtomicBool>,
-    ) -> Result<Self, cpal::BuildStreamError> {
+    pub fn start(volume: Arc<AtomicU8>, flush: Arc<AtomicBool>) -> Result<Self, String> {
         let host = cpal::default_host();
-        let device = host.default_output_device().expect("无默认音频输出设备");
-        let supported = device.default_output_config().expect("无默认输出配置");
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| "无默认音频输出设备".to_string())?;
+        let supported = device
+            .default_output_config()
+            .map_err(|e| format!("无默认输出配置: {e}"))?;
         let sample_format = supported.sample_format();
         let config: cpal::StreamConfig = supported.into();
         let channels = config.channels;
@@ -96,45 +97,49 @@ impl AudioOutput {
         let err_fn = |e| eprintln!("音频流错误: {e}");
 
         let stream = match sample_format {
-            SampleFormat::F32 => device.build_output_stream(
-                &config,
-                move |data: &mut [f32], _| {
-                    if flush.swap(false, Ordering::Relaxed) {
-                        while consumer.try_pop().is_some() {}
-                    }
-                    let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-                    let mut filled = 0u64;
-                    for slot in data.iter_mut() {
-                        *slot = consumer.try_pop().unwrap_or(0.0) * g;
-                        filled += 1;
-                    }
-                    clock_cb.add_frames(filled / ch);
-                },
-                err_fn,
-                None,
-            )?,
-            SampleFormat::I16 => device.build_output_stream(
-                &config,
-                move |data: &mut [i16], _| {
-                    if flush.swap(false, Ordering::Relaxed) {
-                        while consumer.try_pop().is_some() {}
-                    }
-                    let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-                    let mut filled = 0u64;
-                    for slot in data.iter_mut() {
-                        let s = consumer.try_pop().unwrap_or(0.0) * g;
-                        *slot = i16::from_sample(s);
-                        filled += 1;
-                    }
-                    clock_cb.add_frames(filled / ch);
-                },
-                err_fn,
-                None,
-            )?,
+            SampleFormat::F32 => device
+                .build_output_stream(
+                    &config,
+                    move |data: &mut [f32], _| {
+                        if flush.swap(false, Ordering::Relaxed) {
+                            while consumer.try_pop().is_some() {}
+                        }
+                        let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
+                        let mut filled = 0u64;
+                        for slot in data.iter_mut() {
+                            *slot = consumer.try_pop().unwrap_or(0.0) * g;
+                            filled += 1;
+                        }
+                        clock_cb.add_frames(filled / ch);
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| e.to_string())?,
+            SampleFormat::I16 => device
+                .build_output_stream(
+                    &config,
+                    move |data: &mut [i16], _| {
+                        if flush.swap(false, Ordering::Relaxed) {
+                            while consumer.try_pop().is_some() {}
+                        }
+                        let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
+                        let mut filled = 0u64;
+                        for slot in data.iter_mut() {
+                            let s = consumer.try_pop().unwrap_or(0.0) * g;
+                            *slot = i16::from_sample(s);
+                            filled += 1;
+                        }
+                        clock_cb.add_frames(filled / ch);
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| e.to_string())?,
             other => panic!("不支持的采样格式: {other:?}"),
         };
 
-        stream.play().expect("启动音频流失败");
+        stream.play().map_err(|e| format!("启动音频流失败: {e}"))?;
 
         Ok(Self {
             stream,

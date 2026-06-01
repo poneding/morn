@@ -21,7 +21,11 @@ media = { path = "../media" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 rfd = "0.15"
 rust-i18n = "4"
+semver = "1"
+serde.workspace = true
+ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSBundle", "NSDictionary", "NSObject", "NSString"] }
+objc2-app-kit = { version = "0.2", default-features = false, features = ["NSAlert", "NSApplication", "NSBitmapImageRep", "NSButton", "NSColor", "NSControl", "NSGraphics", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow", "NSWorkspace", "objc2-quartz-core"] }
+objc2-foundation = { version = "0.2", features = ["NSBundle", "NSDictionary", "NSGeometry", "NSObject", "NSString", "NSThread", "NSURL"] }

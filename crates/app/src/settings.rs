@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 /// 绘制设置窗口。`open` 控制显隐, 直接读写 player 的偏好。
 pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player) {
     egui::Window::new(t!("settings").to_string())
+        .id(egui::Id::new("settings_window"))
         .open(open)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
             // 外观
@@ -113,6 +116,23 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                 ui.label(display_screenshot_dir(&current_dir));
             });
             ui.separator();
+            // 更新
+            ui.heading(t!("updates").to_string());
+            settings_row(ui, t!("check_updates_on_startup").to_string(), |ui| {
+                let mut enabled = player.prefs().check_updates_on_startup;
+                if ui.checkbox(&mut enabled, "").changed() {
+                    player.set_check_updates_on_startup(enabled);
+                }
+            });
+            if player.prefs().check_updates_on_startup {
+                settings_row(ui, t!("check_beta_updates").to_string(), |ui| {
+                    let mut enabled = player.prefs().check_beta_updates;
+                    if ui.checkbox(&mut enabled, "").changed() {
+                        player.set_check_beta_updates(enabled);
+                    }
+                });
+            }
+            ui.separator();
             // 字幕
             ui.heading(t!("subtitle").to_string());
             settings_row(ui, t!("subtitle_size").to_string(), |ui| {
@@ -182,6 +202,21 @@ mod tests {
     }
 
     #[test]
+    fn settings_exposes_update_preferences_with_beta_gated_by_startup_check() {
+        let source = include_str!("settings.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("updates"));
+        assert!(source.contains("check_updates_on_startup"));
+        assert!(source.contains("check_beta_updates"));
+        assert!(source.contains("set_check_updates_on_startup"));
+        assert!(source.contains("set_check_beta_updates"));
+        assert!(source.contains("if player.prefs().check_updates_on_startup"));
+    }
+
+    #[test]
     fn settings_exposes_configurable_screenshot_directory() {
         let source = include_str!("settings.rs")
             .split("#[cfg(test)]")
@@ -204,5 +239,26 @@ mod tests {
         assert!(source.contains("fn settings_row"));
         assert!(source.contains("right_to_left(egui::Align::Center)"));
         assert!(!source.contains("ui.horizontal(|ui| {\n                ui.label(t!(\"language\")"));
+    }
+
+    #[test]
+    fn settings_window_uses_stable_id_and_cannot_collapse() {
+        let source = include_str!("settings.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains(".id(egui::Id::new(\"settings_window\"))"));
+        assert!(source.contains(".collapsible(false)"));
+    }
+
+    #[test]
+    fn settings_window_opens_centered() {
+        let source = include_str!("settings.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains(".anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)"));
     }
 }

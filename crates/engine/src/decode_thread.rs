@@ -21,6 +21,7 @@ pub struct DecodeThread {
     stop: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
     hw_active: Arc<AtomicBool>,
+    frame_pending: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -37,6 +38,8 @@ impl DecodeThread {
         let ended_thread = ended.clone();
         let hw_active = Arc::new(AtomicBool::new(false));
         let hw_active_t = hw_active.clone();
+        let frame_pending = Arc::new(AtomicBool::new(false));
+        let frame_pending_t = frame_pending.clone();
 
         let join = std::thread::spawn(move || {
             // 解码器在工作线程内打开, 满足 !Send 约束; 上面已校验过可打开。
@@ -67,6 +70,7 @@ impl DecodeThread {
                         if tx.send(frame).is_err() {
                             break;
                         }
+                        frame_pending_t.store(true, Ordering::Relaxed);
                     }
                     Ok(None) | Err(_) => {
                         ended_thread.store(true, Ordering::Relaxed);
@@ -82,6 +86,7 @@ impl DecodeThread {
             stop,
             ended,
             hw_active,
+            frame_pending,
             join: Some(join),
         })
     }
@@ -117,6 +122,12 @@ impl DecodeThread {
     /// 当前是否实际硬件解码(由解码线程按帧更新)。
     pub fn is_hardware(&self) -> bool {
         self.hw_active.load(Ordering::Relaxed)
+    }
+
+    /// 解码线程每发出一帧置 true, UI 用 take_frame_pending() 读+清,
+    /// 把"有新帧可显示"翻译成一次即时 repaint, 替代固定 16ms 轮询。
+    pub fn take_frame_pending(&self) -> bool {
+        self.frame_pending.swap(false, Ordering::Relaxed)
     }
 
     pub fn stop(mut self) {
@@ -165,6 +176,27 @@ mod tests {
             }
         }
         assert!((23..=27).contains(&count), "帧数 {count} 不符");
+        handle.stop();
+    }
+
+    #[test]
+    fn sets_frame_pending_flag_when_a_frame_is_decoded() {
+        let path = fixture();
+        assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
+        let handle = DecodeThread::spawn(&path, 8).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut observed = false;
+        while std::time::Instant::now() < deadline {
+            if handle.take_frame_pending() {
+                observed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            observed,
+            "frame_pending flag was never set within 3s of decoding"
+        );
         handle.stop();
     }
 }

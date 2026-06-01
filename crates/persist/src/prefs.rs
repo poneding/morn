@@ -21,6 +21,8 @@ pub struct Preferences {
     pub theme: String,
     pub subtitle_font_size: f32,
     pub playback_mode: PlaybackMode,
+    pub check_updates_on_startup: bool,
+    pub check_beta_updates: bool,
     #[serde(default = "default_screenshot_dir_string")]
     pub screenshot_dir: String,
     pub last_playlist: Vec<String>,
@@ -40,6 +42,8 @@ impl Default for Preferences {
             theme: "system".to_string(),
             subtitle_font_size: 24.0,
             playback_mode: PlaybackMode::StopAtEnd,
+            check_updates_on_startup: false,
+            check_beta_updates: false,
             screenshot_dir: default_screenshot_dir_string(),
             last_playlist: Vec::new(),
             last_index: 0,
@@ -193,6 +197,8 @@ mod tests {
         p.theme = "dark".into();
         p.subtitle_font_size = 30.0;
         p.playback_mode = PlaybackMode::RepeatOne;
+        p.check_updates_on_startup = true;
+        p.check_beta_updates = true;
         p.save(&path).unwrap();
         let loaded = Preferences::load(&path).unwrap();
         assert_eq!(loaded.language, "zh-TW");
@@ -200,6 +206,8 @@ mod tests {
         assert_eq!(loaded.theme, "dark");
         assert_eq!(loaded.subtitle_font_size, 30.0);
         assert_eq!(loaded.playback_mode, PlaybackMode::RepeatOne);
+        assert!(loaded.check_updates_on_startup);
+        assert!(loaded.check_beta_updates);
     }
 
     #[test]
@@ -210,6 +218,8 @@ mod tests {
         assert_eq!(p.theme, "system");
         assert_eq!(p.subtitle_font_size, 24.0);
         assert_eq!(p.playback_mode, PlaybackMode::StopAtEnd);
+        assert!(!p.check_updates_on_startup);
+        assert!(!p.check_beta_updates);
         assert_eq!(p.screenshot_dir, default_screenshot_dir().to_string_lossy());
     }
 

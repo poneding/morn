@@ -151,3 +151,63 @@ seconds:
   en: s
   zh-CN: 秒
   zh-TW: 秒
+updates:
+  en: Updates
+  zh-CN: 更新
+  zh-TW: 更新
+check_updates:
+  en: Check for Updates...
+  zh-CN: 检查更新...
+  zh-TW: 檢查更新...
+check_updates_on_startup:
+  en: Check on Startup
+  zh-CN: 启动时检查更新
+  zh-TW: 啟動時檢查更新
+check_beta_updates:
+  en: Include Beta Updates
+  zh-CN: 检查 beta 版本更新
+  zh-TW: 檢查 beta 版本更新
+current_version:
+  en: Current Version
+  zh-CN: 当前版本
+  zh-TW: 目前版本
+check_now:
+  en: Check Now
+  zh-CN: 立即检查
+  zh-TW: 立即檢查
+update_ready_to_check:
+  en: Ready to check for updates.
+  zh-CN: 可以手动检查更新。
+  zh-TW: 可以手動檢查更新。
+checking_updates:
+  en: Checking for updates...
+  zh-CN: 正在检查更新...
+  zh-TW: 正在檢查更新...
+update_up_to_date:
+  en: You are up to date.
+  zh-CN: 当前已是最新版本。
+  zh-TW: 目前已是最新版本。
+update_available:
+  en: Update Available
+  zh-CN: 发现新版本
+  zh-TW: 發現新版本
+update_check_failed:
+  en: Update check failed
+  zh-CN: 检查更新失败
+  zh-TW: 檢查更新失敗
+open_release_page:
+  en: Open Release Page
+  zh-CN: 打开发布页面
+  zh-TW: 開啟發布頁面
+update_channel_stable:
+  en: stable
+  zh-CN: 稳定版
+  zh-TW: 穩定版
+update_channel_beta:
+  en: beta
+  zh-CN: beta
+  zh-TW: beta
+update_source_missing:
+  en: Update source is not configured.
+  zh-CN: 尚未配置更新源。
+  zh-TW: 尚未設定更新來源。

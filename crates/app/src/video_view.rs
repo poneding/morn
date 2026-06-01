@@ -68,6 +68,16 @@ fn empty_state(ui: &mut egui::Ui) -> Vec<Command> {
     commands
 }
 
+fn fit_rect(container: egui::Rect, content: egui::Vec2) -> egui::Rect {
+    if content.x <= 0.0 || content.y <= 0.0 || container.is_negative() {
+        return egui::Rect::from_center_size(container.center(), egui::Vec2::ZERO);
+    }
+    let scale = (container.width() / content.x)
+        .min(container.height() / content.y)
+        .max(0.0);
+    egui::Rect::from_center_size(container.center(), content * scale)
+}
+
 /// 持有 wgpu 纹理与其在 egui 中的注册 id。
 pub struct VideoView {
     texture: Option<VideoTexture>,
@@ -128,7 +138,7 @@ impl VideoView {
                 match frame_action(master_ms, vf.pts_ms, FRAME_TOL_MS) {
                     FrameAction::Show => {
                         self.recovering_after_seek = false;
-                        self.upload(frame, &vf);
+                        self.upload(frame, vf);
                         break;
                     }
                     FrameAction::Discard => continue,
@@ -146,24 +156,29 @@ impl VideoView {
             }
         }
 
+        let mut subtitle_rect = ui.available_rect_before_wrap();
         if let (Some(id), (w, h)) = (self.tex_id, self.size) {
             if w > 0 && h > 0 {
-                let avail = ui.available_size();
-                let scale = (avail.x / w as f32).min(avail.y / h as f32).max(0.0);
-                let draw = egui::vec2(w as f32 * scale, h as f32 * scale);
-                ui.centered_and_justified(|ui| {
-                    ui.image((id, draw));
-                });
+                let panel_rect = ui.available_rect_before_wrap();
+                ui.allocate_rect(panel_rect, egui::Sense::hover());
+                let image_rect = fit_rect(panel_rect, egui::vec2(w as f32, h as f32));
+                subtitle_rect = image_rect;
+                ui.painter().image(
+                    id,
+                    image_rect,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
             }
         } else {
             commands.extend(empty_state(ui));
+            subtitle_rect = ui.min_rect();
         }
 
-        let rect = ui.min_rect();
         if let Some(text) = player.current_subtitle() {
             crate::subtitle_overlay::draw_subtitle(
                 ui,
-                rect,
+                subtitle_rect,
                 &text,
                 player.prefs().subtitle_font_size,
             );
@@ -172,7 +187,7 @@ impl VideoView {
         commands
     }
 
-    fn upload(&mut self, frame: &mut eframe::Frame, vf: &media::VideoFrame) {
+    fn upload(&mut self, frame: &mut eframe::Frame, vf: media::VideoFrame) {
         let render_state = frame
             .wgpu_render_state()
             .expect("需要 wgpu 后端 (NativeOptions.renderer = Wgpu)");
@@ -196,10 +211,17 @@ impl VideoView {
             self.size = (vf.width, vf.height);
         }
 
+        // 1080p 一帧 RGBA ≈ 8MB, clone 会浪费内存带宽; 直接 move 进 last_frame。
+        let media::VideoFrame {
+            rgba,
+            width,
+            height,
+            pts_ms: _,
+        } = vf;
         if let Some(tex) = self.texture.as_mut() {
-            tex.upload(queue, &vf.rgba);
+            tex.upload(queue, &rgba);
         }
-        self.last_frame = Some((vf.rgba.clone(), vf.width, vf.height));
+        self.last_frame = Some((rgba, width, height));
     }
 
     /// 返回最近一次显示的帧 (RGBA8, 宽, 高), 供截图使用。
@@ -367,5 +389,29 @@ mod tests {
             !source.contains("empty_state_content_size"),
             "empty state should use a single layout pass"
         );
+    }
+
+    #[test]
+    fn video_texture_draw_uses_fixed_rect_not_image_widget_layout() {
+        let source = include_str!("video_view.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("fn fit_rect"));
+        assert!(source.contains("ui.allocate_rect"));
+        assert!(source.contains("ui.painter().image"));
+        assert!(!source.contains("centered_and_justified"));
+        assert!(!source.contains("ui.image((id, draw))"));
+    }
+
+    #[test]
+    fn fit_rect_preserves_aspect_inside_container() {
+        let container = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let fitted = fit_rect(container, egui::vec2(1920.0, 1080.0));
+
+        assert!((fitted.width() - 800.0).abs() < f32::EPSILON);
+        assert!((fitted.height() - 450.0).abs() < f32::EPSILON);
+        assert_eq!(fitted.center(), container.center());
     }
 }
