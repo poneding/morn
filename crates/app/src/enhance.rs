@@ -1,7 +1,7 @@
 use eframe::egui;
 use player_core::Command;
 use rust_i18n::t;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const RATE_OPTIONS: [u16; 8] = [25, 50, 75, 100, 125, 150, 175, 200];
 pub const RATE_COMBO_WIDTH: f32 = 0.0;
@@ -46,9 +46,8 @@ pub fn enhance_bar(ui: &mut egui::Ui, rate_pct: u16) -> EnhanceActions {
 }
 
 /// 把 RGBA8 帧写为 PNG, 返回保存路径。
-pub fn save_screenshot(rgba: &[u8], w: u32, h: u32) -> std::io::Result<PathBuf> {
-    let dir = std::env::temp_dir().join("morn-shots");
-    std::fs::create_dir_all(&dir)?;
+pub fn save_screenshot(rgba: &[u8], w: u32, h: u32, dir: &Path) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("morn-shot-{}.png", now_stamp()));
     image::save_buffer(&path, rgba, w, h, image::ExtendedColorType::Rgba8)
         .map_err(std::io::Error::other)?;
@@ -117,5 +116,33 @@ mod tests {
         assert!(source.contains("from_id_salt"));
         assert!(source.contains("width(RATE_COMBO_WIDTH)"));
         assert!(!source.contains("from_label"));
+    }
+
+    #[test]
+    fn screenshot_saver_uses_configured_directory_instead_of_temp() {
+        let source = include_str!("enhance.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(!source.contains("temp_dir()"));
+        assert!(!source.contains("morn-shots"));
+        assert!(source.contains("create_dir_all(dir)"));
+    }
+
+    #[test]
+    fn save_screenshot_writes_file_inside_requested_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_screenshot_test_{}_{}",
+            std::process::id(),
+            super::now_stamp()
+        ));
+        let rgba = [255u8, 0, 0, 255];
+
+        let path = super::save_screenshot(&rgba, 1, 1, &dir).unwrap();
+
+        assert!(path.starts_with(&dir));
+        assert!(path.exists());
+        std::fs::remove_dir_all(dir).ok();
     }
 }

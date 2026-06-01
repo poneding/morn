@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +21,8 @@ pub struct Preferences {
     pub theme: String,
     pub subtitle_font_size: f32,
     pub playback_mode: PlaybackMode,
+    #[serde(default = "default_screenshot_dir_string")]
+    pub screenshot_dir: String,
     pub last_playlist: Vec<String>,
     pub last_index: usize,
     pub history: Vec<String>,
@@ -38,12 +40,26 @@ impl Default for Preferences {
             theme: "system".to_string(),
             subtitle_font_size: 24.0,
             playback_mode: PlaybackMode::StopAtEnd,
+            screenshot_dir: default_screenshot_dir_string(),
             last_playlist: Vec::new(),
             last_index: 0,
             history: Vec::new(),
             resume_points: HashMap::new(),
         }
     }
+}
+
+pub fn default_screenshot_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("~"))
+        .join("Pictures")
+        .join("Morn")
+}
+
+fn default_screenshot_dir_string() -> String {
+    default_screenshot_dir().to_string_lossy().into_owned()
 }
 
 impl Preferences {
@@ -85,7 +101,25 @@ mod tests {
         assert_eq!(p.volume, 100);
         assert_eq!(p.window_size, (1280, 720));
         assert_eq!(p.playback_mode, PlaybackMode::StopAtEnd);
+        assert_eq!(p.screenshot_dir, default_screenshot_dir().to_string_lossy());
+        assert!(
+            Path::new(&p.screenshot_dir).ends_with(Path::new("Pictures").join("Morn")),
+            "default screenshot dir should live under ~/Pictures/Morn"
+        );
         assert!(p.resume_point("/any.mp4").is_none());
+    }
+
+    #[test]
+    fn preferences_include_configurable_screenshot_directory() {
+        let source = include_str!("prefs.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("pub screenshot_dir: String"));
+        assert!(source.contains("default_screenshot_dir()"));
+        assert!(source.contains("Pictures"));
+        assert!(source.contains("Morn"));
     }
 
     #[test]
@@ -104,12 +138,14 @@ mod tests {
         let mut p = Preferences::default();
         p.volume = 55;
         p.window_size = (1920, 1080);
+        p.screenshot_dir = dir.path().join("shots").to_string_lossy().into_owned();
         p.set_resume_point("/v.mp4", 12_345);
         p.save(&path).unwrap();
 
         let loaded = Preferences::load(&path).unwrap();
         assert_eq!(loaded.volume, 55);
         assert_eq!(loaded.window_size, (1920, 1080));
+        assert_eq!(loaded.screenshot_dir, p.screenshot_dir);
         assert_eq!(loaded.resume_point("/v.mp4"), Some(12_345));
     }
 
@@ -119,6 +155,21 @@ mod tests {
         let path = dir.path().join("nonexistent.json");
         let loaded = Preferences::load(&path).unwrap();
         assert_eq!(loaded.volume, 100);
+    }
+
+    #[test]
+    fn load_old_preferences_without_screenshot_dir_uses_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.json");
+        std::fs::write(&path, r#"{"volume":55,"window_size":[1024,768]}"#).unwrap();
+
+        let loaded = Preferences::load(&path).unwrap();
+
+        assert_eq!(loaded.volume, 55);
+        assert_eq!(
+            loaded.screenshot_dir,
+            default_screenshot_dir().to_string_lossy()
+        );
     }
 
     #[test]
@@ -159,6 +210,7 @@ mod tests {
         assert_eq!(p.theme, "system");
         assert_eq!(p.subtitle_font_size, 24.0);
         assert_eq!(p.playback_mode, PlaybackMode::StopAtEnd);
+        assert_eq!(p.screenshot_dir, default_screenshot_dir().to_string_lossy());
     }
 
     #[test]

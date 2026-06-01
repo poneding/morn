@@ -71,6 +71,14 @@ screenshot_no_frame:
   en: No frame to capture
   zh-CN: 当前没有可截图画面
   zh-TW: 目前沒有可截圖畫面
+screenshot_dir:
+  en: Screenshot Folder
+  zh-CN: 截图保存位置
+  zh-TW: 截圖儲存位置
+choose_folder:
+  en: Choose Folder
+  zh-CN: 选择文件夹
+  zh-TW: 選擇資料夾
 drop_hint:
   en: Drop a video file to start
   zh-CN: 拖入视频文件开始播放

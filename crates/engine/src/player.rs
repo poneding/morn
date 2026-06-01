@@ -96,6 +96,9 @@ impl Player {
     pub fn set_playback_mode(&mut self, mode: persist::PlaybackMode) {
         self.prefs.playback_mode = mode;
     }
+    pub fn set_screenshot_dir(&mut self, path: &str) {
+        self.prefs.screenshot_dir = path.to_string();
+    }
 
     fn raw_position_ms(&self) -> u64 {
         self.audio_out
@@ -609,11 +612,24 @@ mod tests {
         p.set_theme("dark");
         p.set_subtitle_font_size(32.0);
         p.set_playback_mode(persist::PlaybackMode::LoopPlaylist);
+        p.set_screenshot_dir("/tmp/morn-shots");
         assert_eq!(p.prefs().seek_step_secs, 20);
         assert_eq!(p.prefs().language, "en");
         assert_eq!(p.prefs().theme, "dark");
         assert_eq!(p.prefs().subtitle_font_size, 32.0);
         assert_eq!(p.prefs().playback_mode, persist::PlaybackMode::LoopPlaylist);
+        assert_eq!(p.prefs().screenshot_dir, "/tmp/morn-shots");
+    }
+
+    #[test]
+    fn player_exposes_screenshot_directory_preference_setter() {
+        let source = include_str!("player.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("set_screenshot_dir"));
+        assert!(source.contains("prefs.screenshot_dir"));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use eframe::egui;
 use engine::{PlaybackMode, Player};
 use rust_i18n::t;
+use std::path::{Path, PathBuf};
 
 /// 绘制设置窗口。`open` 控制显隐, 直接读写 player 的偏好。
 pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player) {
@@ -94,6 +95,24 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                 }
             });
             ui.separator();
+            // 截图
+            ui.heading(t!("screenshot").to_string());
+            settings_row(ui, t!("screenshot_dir").to_string(), |ui| {
+                let current_dir = player.prefs().screenshot_dir.clone();
+                if ui.button(t!("choose_folder").to_string()).clicked() {
+                    let dialog = if current_dir.is_empty() {
+                        rfd::FileDialog::new()
+                    } else {
+                        rfd::FileDialog::new().set_directory(Path::new(&current_dir))
+                    };
+                    if let Some(dir) = dialog.pick_folder() {
+                        let dir = dir.to_string_lossy().into_owned();
+                        player.set_screenshot_dir(&dir);
+                    }
+                }
+                ui.label(display_screenshot_dir(&current_dir));
+            });
+            ui.separator();
             // 字幕
             ui.heading(t!("subtitle").to_string());
             settings_row(ui, t!("subtitle_size").to_string(), |ui| {
@@ -137,6 +156,17 @@ fn playback_mode_label(mode: PlaybackMode) -> String {
     }
 }
 
+fn display_screenshot_dir(path: &str) -> String {
+    let path = Path::new(path);
+    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        let home = PathBuf::from(home);
+        if let Ok(stripped) = path.strip_prefix(&home) {
+            return format!("~/{}", stripped.display());
+        }
+    }
+    path.display().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -149,6 +179,19 @@ mod tests {
         assert!(source.contains("playback_mode"));
         assert!(source.contains("LoopPlaylist"));
         assert!(source.contains("RepeatOne"));
+    }
+
+    #[test]
+    fn settings_exposes_configurable_screenshot_directory() {
+        let source = include_str!("settings.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("screenshot_dir"));
+        assert!(source.contains("FileDialog"));
+        assert!(source.contains("pick_folder"));
+        assert!(source.contains("set_screenshot_dir"));
     }
 
     #[test]

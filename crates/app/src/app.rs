@@ -265,7 +265,8 @@ impl eframe::App for PlayerApp {
         }
         if let Some(notice_pos) = screenshot_notice_pos {
             if let Some((rgba, w, h)) = self.video_view.last_frame() {
-                match crate::enhance::save_screenshot(rgba, w, h) {
+                let screenshot_dir = std::path::Path::new(&self.player.prefs().screenshot_dir);
+                match crate::enhance::save_screenshot(rgba, w, h, screenshot_dir) {
                     Ok(p) => {
                         eprintln!("截图已保存: {}", p.display());
                         self.set_screenshot_notice(
@@ -389,6 +390,14 @@ mod tests {
         assert!(!source.contains("Align2::RIGHT_BOTTOM"));
         assert!(source.contains("notice_pos"));
         assert!(source.contains("p.display()"));
+    }
+
+    #[test]
+    fn screenshots_are_saved_under_configured_directory() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+
+        assert!(source.contains("prefs().screenshot_dir"));
+        assert!(source.contains("save_screenshot"));
     }
 
     #[test]
