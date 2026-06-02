@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to rebuild, for example v0.1.0-alpha.1"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,23 +18,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
-    name: Build and publish release
+  validate:
+    name: Validate release tag
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.tag.outputs.release_tag }}
+    steps:
+      - name: Validate release tag
+        id: tag
+        shell: bash
+        run: |
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag must match vX.Y.Z or vX.Y.Z-suffix, got '${tag}'"
+            exit 1
+          fi
+          echo "release_tag=${tag}" >> "${GITHUB_OUTPUT}"
 
+  checks:
+    name: Check workspace
+    runs-on: ubuntu-latest
+    needs: validate
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Validate release tag
-        run: |
-          tag="${GITHUB_REF_NAME}"
-          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Release tag must match vX.Y.Z or vX.Y.Z-suffix, got '${tag}'"
-            exit 1
-          fi
+          ref: ${{ needs.validate.outputs.release_tag }}
 
       - name: Install Rust toolchain
         run: |
@@ -75,8 +91,180 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  build:
+    name: Build ${{ matrix.asset_suffix }}
+    needs:
+      - validate
+      - checks
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset_suffix: linux-x86_64
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-gnu
+            package_ext: tar.gz
+          - asset_suffix: linux-aarch64
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            package_ext: tar.gz
+          - asset_suffix: macos-x86_64
+            runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            package_ext: tar.gz
+          - asset_suffix: macos-aarch64
+            runner: macos-15
+            rust_target: aarch64-apple-darwin
+            package_ext: tar.gz
+          - asset_suffix: windows-x86_64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            vcpkg_triplet: x64-windows
+            package_ext: zip
+          - asset_suffix: windows-aarch64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+            vcpkg_triplet: arm64-windows
+            package_ext: zip
+    env:
+      RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.release_tag }}
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "${{ matrix.rust_target }}"
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            ffmpeg \
+            libasound2-dev \
+            libavcodec-dev \
+            libavdevice-dev \
+            libavfilter-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libegl1-mesa-dev \
+            libgl1-mesa-dev \
+            libgtk-3-dev \
+            libswresample-dev \
+            libswscale-dev \
+            libudev-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxrandr-dev \
+            pkg-config
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install ffmpeg pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "${GITHUB_ENV}"
+
+      - name: Cache vcpkg binary archives
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LOCALAPPDATA }}\vcpkg\archives
+          key: vcpkg-${{ matrix.rust_target }}-ffmpeg-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            vcpkg-${{ matrix.rust_target }}-ffmpeg-
+
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm -y --no-progress
+
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP "vcpkg"
+          git clone --depth 1 https://github.com/microsoft/vcpkg $vcpkgRoot
+          & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+
+          $triplet = "${{ matrix.vcpkg_triplet }}"
+          $archiveDir = Join-Path $env:LOCALAPPDATA "vcpkg\archives"
+          New-Item -ItemType Directory -Force -Path $archiveDir | Out-Null
+          $env:VCPKG_BINARY_SOURCES = "clear;files,$archiveDir,readwrite"
+          & "$vcpkgRoot\vcpkg.exe" install "ffmpeg:$triplet"
+
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VCPKG_DEFAULT_TRIPLET=$triplet" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VCPKG_BINARY_SOURCES=$env:VCPKG_BINARY_SOURCES" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          $llvmBin = Join-Path $env:ProgramFiles "LLVM\bin"
+          if (Test-Path $llvmBin) {
+            "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+
       - name: Build release binary
-        run: cargo build --release -p app --bin morn
+        shell: bash
+        run: cargo build --release -p app --bin morn --target "${{ matrix.rust_target }}"
+
+      - name: Package Unix release asset
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          name="morn-${RELEASE_TAG}-${{ matrix.asset_suffix }}"
+          mkdir -p "dist/${name}"
+          cp "target/${{ matrix.rust_target }}/release/morn" "dist/${name}/"
+          cp README.md "dist/${name}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+
+      - name: Package Windows release asset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "morn-$env:RELEASE_TAG-${{ matrix.asset_suffix }}"
+          $dist = Join-Path "dist" $name
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item "target\${{ matrix.rust_target }}\release\morn.exe" $dist
+          Copy-Item "README.md" $dist
+
+          $vcpkgBin = Join-Path $env:VCPKG_ROOT "installed\${{ matrix.vcpkg_triplet }}\bin"
+          if (Test-Path $vcpkgBin) {
+            Copy-Item "$vcpkgBin\*.dll" $dist -ErrorAction SilentlyContinue
+          }
+
+          Compress-Archive -Path "$dist\*" -DestinationPath "dist\$name.zip" -Force
+
+      - name: Upload release asset artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: morn-${{ needs.validate.outputs.release_tag }}-${{ matrix.asset_suffix }}
+          path: dist/morn-${{ needs.validate.outputs.release_tag }}-${{ matrix.asset_suffix }}.${{ matrix.package_ext }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs:
+      - validate
+      - build
+    env:
+      RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.release_tag }}
 
       - name: Generate changelog
         uses: orhun/git-cliff-action@v4
@@ -87,21 +275,32 @@ jobs:
           config: cliff.toml
           args: --verbose --latest --strip header
 
-      - name: Package release asset
-        run: |
-          name="morn-${GITHUB_REF_NAME}-linux-x86_64"
-          mkdir -p "dist/${name}"
-          cp target/release/morn "dist/${name}/"
-          cp README.md CHANGELOG.md "dist/${name}/"
-          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
 
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            "dist/morn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" \
-            CHANGELOG.md \
-            --title "${GITHUB_REF_NAME}" \
-            --notes-file CHANGELOG.md \
-            --verify-tag
+          mapfile -t assets < <(find dist -type f -name 'morn-*' | sort)
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "::error::No release assets were downloaded"
+            exit 1
+          fi
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" CHANGELOG.md --clobber
+            gh release edit "${RELEASE_TAG}" \
+              --title "${RELEASE_TAG}" \
+              --notes-file CHANGELOG.md
+          else
+            gh release create "${RELEASE_TAG}" \
+              "${assets[@]}" \
+              CHANGELOG.md \
+              --title "${RELEASE_TAG}" \
+              --notes-file CHANGELOG.md \
+              --verify-tag
+          fi
