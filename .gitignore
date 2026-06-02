@@ -1,5 +1,6 @@
 .superpowers/
 target/
+.cargo/config.toml
 /Cargo.lock
 .claude/settings.local.json
 crates/media/tests/fixtures/

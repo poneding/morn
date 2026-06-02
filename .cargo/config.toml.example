@@ -1,0 +1,9 @@
+# 复制此文件为 config.toml 并根据你的本地路径进行修改
+# 注意：config.toml 已被 gitignore，不会同步到 Git 仓库
+
+[env]
+# Clang 的位置，用于 bindgen (Windows)
+# LIBCLANG_PATH = "C:/Program Files/LLVM/bin"
+
+# vcpkg 的安装根目录
+# VCPKG_ROOT = "C:/path/to/vcpkg"

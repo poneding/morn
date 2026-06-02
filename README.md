@@ -30,26 +30,7 @@ crates/
 
 ## 环境依赖
 
-需要先安装 Rust stable 和 FFmpeg 开发库。
-
-macOS:
-
-```bash
-brew install ffmpeg
-```
-
-Ubuntu:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y \
-  clang ffmpeg pkg-config \
-  libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev \
-  libswresample-dev libswscale-dev \
-  libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev libwayland-dev
-```
-
-Windows 建议通过 vcpkg 或预编译 FFmpeg 开发包提供 `ffmpeg-sys-next` 所需的头文件和库，并按本机环境设置对应的库搜索路径。
+本项目涉及 C 库绑定（FFmpeg），需要安装 Rust 环境及相关开发库。详细的各平台（Windows/macOS/Linux）环境搭建手册请参考 [开发环境配置指南](docs/DEVELOPMENT.md)。
 
 ## 开发
 
@@ -84,7 +65,15 @@ cargo build --release -p app --bin morn
 仓库包含两个 GitHub Actions workflow：
 
 - `CI`：在 `master` push 和指向 `master` 的 pull request 上运行格式检查、Clippy 和测试。
-- `Release`：在推送 `vX.Y.Z` 或 `vX.Y.Z-suffix` tag 时运行检查、构建 Linux x86_64 release 包，并使用 git-cliff 生成 `CHANGELOG.md` 作为 GitHub Release notes。
+- `Release`：在推送 `vX.Y.Z` 或 `vX.Y.Z-suffix` tag 时运行检查，并在 GitHub hosted runner 上构建/上传以下 release 包：
+  - `linux-x86_64`
+  - `linux-aarch64`
+  - `macos-x86_64`
+  - `macos-aarch64`
+  - `windows-x86_64`
+  - `windows-aarch64`
+
+Release workflow 也支持在 GitHub Actions 页面手动 `workflow_dispatch`，输入已有 tag 后会重新构建并用 `--clobber` 覆盖同名 release assets。
 
 发布示例：
 
