@@ -1,16 +1,25 @@
 use eframe::egui;
 use engine::{PlaybackMode, Player};
 use rust_i18n::t;
-use std::path::{Path, PathBuf};
 
 /// 绘制设置窗口。`open` 控制显隐, 直接读写 player 的偏好。
-pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player) {
+pub fn settings_window(
+    ctx: &egui::Context,
+    open: &mut bool,
+    player: &mut Player,
+    update_check: &mut crate::updater::UpdateChecker,
+) {
+    let frosted_frame = crate::visuals::frosted_frame_for_style(
+        &ctx.global_style(),
+        egui::Margin::symmetric(10, 8),
+    );
     egui::Window::new(t!("settings").to_string())
         .id(egui::Id::new("settings_window"))
         .open(open)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .collapsible(false)
         .resizable(false)
+        .frame(frosted_frame)
         .show(ctx, |ui| {
             // 外观
             ui.heading(t!("appearance").to_string());
@@ -18,6 +27,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                 let mut lang = player.prefs().language.clone();
                 egui::ComboBox::from_id_salt("lang")
                     .selected_text(lang_label(&lang))
+                    .popup_style(crate::visuals::frosted_popup_style())
                     .show_ui(ui, |ui| {
                         for (code, label) in [
                             ("zh-CN", "简体中文"),
@@ -35,6 +45,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                 let mut theme = player.prefs().theme.clone();
                 egui::ComboBox::from_id_salt("theme")
                     .selected_text(theme_label(&theme))
+                    .popup_style(crate::visuals::frosted_popup_style())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
                             &mut theme,
@@ -63,6 +74,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                 let mut step = player.prefs().seek_step_secs;
                 egui::ComboBox::from_id_salt("seek_step")
                     .selected_text(format!("{} {}", step, t!("seconds")))
+                    .popup_style(crate::visuals::frosted_popup_style())
                     .show_ui(ui, |ui| {
                         for s in [5u64, 10, 20, 30] {
                             ui.selectable_value(&mut step, s, format!("{} {}", s, t!("seconds")));
@@ -76,6 +88,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                 let mut mode = player.prefs().playback_mode;
                 egui::ComboBox::from_id_salt("playback_mode")
                     .selected_text(playback_mode_label(mode))
+                    .popup_style(crate::visuals::frosted_popup_style())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
                             &mut mode,
@@ -101,23 +114,45 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
             // 截图
             ui.heading(t!("screenshot").to_string());
             settings_row(ui, t!("screenshot_dir").to_string(), |ui| {
-                let current_dir = player.prefs().screenshot_dir.clone();
-                if ui.button(t!("choose_folder").to_string()).clicked() {
-                    let dialog = if current_dir.is_empty() {
+                let configured_dir_is_empty = player.prefs().screenshot_dir.is_empty();
+                let current_dir_path = player.screenshot_dir();
+                if ui
+                    .button("📁")
+                    .on_hover_text(t!("choose_folder").to_string())
+                    .clicked()
+                {
+                    let dialog = if configured_dir_is_empty {
                         rfd::FileDialog::new()
                     } else {
-                        rfd::FileDialog::new().set_directory(Path::new(&current_dir))
+                        rfd::FileDialog::new().set_directory(&current_dir_path)
                     };
                     if let Some(dir) = dialog.pick_folder() {
                         let dir = dir.to_string_lossy().into_owned();
                         player.set_screenshot_dir(&dir);
                     }
                 }
-                ui.label(display_screenshot_dir(&current_dir));
+                ui.label(current_dir_path.display().to_string());
             });
             ui.separator();
             // 更新
-            ui.heading(t!("updates").to_string());
+            ui.horizontal(|ui| {
+                ui.heading(t!("updates").to_string());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(!update_check.is_checking(), egui::Button::new("↻"))
+                        .on_hover_text(t!("check_now").to_string())
+                        .clicked()
+                    {
+                        update_check.begin(player.prefs().check_beta_updates);
+                    }
+                    if update_check.is_checking() {
+                        ui.add(egui::Spinner::new());
+                    }
+                });
+            });
+            settings_row(ui, t!("current_version").to_string(), |ui| {
+                ui.label(update_check.current_version());
+            });
             settings_row(ui, t!("check_updates_on_startup").to_string(), |ui| {
                 let mut enabled = player.prefs().check_updates_on_startup;
                 if ui.checkbox(&mut enabled, "").changed() {
@@ -132,6 +167,7 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                     }
                 });
             }
+            update_status(ui, update_check.status());
             ui.separator();
             // 字幕
             ui.heading(t!("subtitle").to_string());
@@ -142,6 +178,38 @@ pub fn settings_window(ctx: &egui::Context, open: &mut bool, player: &mut Player
                 }
             });
         });
+}
+
+fn update_status(ui: &mut egui::Ui, status: &crate::updater::UpdateStatus) {
+    ui.horizontal_wrapped(|ui| match status {
+        crate::updater::UpdateStatus::Idle => {
+            ui.label(t!("update_ready_to_check").to_string());
+        }
+        crate::updater::UpdateStatus::Checking => {
+            ui.add(egui::Spinner::new());
+            ui.label(t!("checking_updates").to_string());
+        }
+        crate::updater::UpdateStatus::UpToDate => {
+            ui.label(t!("update_up_to_date").to_string());
+        }
+        crate::updater::UpdateStatus::Available(update) => {
+            let channel = if update.prerelease {
+                t!("update_channel_beta").to_string()
+            } else {
+                t!("update_channel_stable").to_string()
+            };
+            ui.label(format!(
+                "{}: {} ({})",
+                t!("update_available"),
+                update.version,
+                channel
+            ));
+            ui.hyperlink_to(t!("open_release_page").to_string(), &update.html_url);
+        }
+        crate::updater::UpdateStatus::Error(err) => {
+            ui.label(format!("{}: {err}", t!("update_check_failed")));
+        }
+    });
 }
 
 fn settings_row(ui: &mut egui::Ui, label: String, add_value: impl FnOnce(&mut egui::Ui)) {
@@ -176,17 +244,6 @@ fn playback_mode_label(mode: PlaybackMode) -> String {
     }
 }
 
-fn display_screenshot_dir(path: &str) -> String {
-    let path = Path::new(path);
-    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
-        let home = PathBuf::from(home);
-        if let Ok(stripped) = path.strip_prefix(&home) {
-            return format!("~/{}", stripped.display());
-        }
-    }
-    path.display().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -217,6 +274,22 @@ mod tests {
     }
 
     #[test]
+    fn settings_update_section_owns_manual_check_and_status() {
+        let source = include_str!("settings.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("UpdateChecker"));
+        assert!(source.contains("Button::new(\"↻\")"));
+        assert!(source.contains("on_hover_text(t!(\"check_now\").to_string())"));
+        assert!(source.contains("update_check.begin(player.prefs().check_beta_updates)"));
+        assert!(source.contains("update_status(ui, update_check.status())"));
+        assert!(source.contains("current_version"));
+        assert!(source.contains("open_release_page"));
+    }
+
+    #[test]
     fn settings_exposes_configurable_screenshot_directory() {
         let source = include_str!("settings.rs")
             .split("#[cfg(test)]")
@@ -224,9 +297,23 @@ mod tests {
             .unwrap();
 
         assert!(source.contains("screenshot_dir"));
+        assert!(source.contains("player.screenshot_dir()"));
+        assert!(!source.contains("home_dir_candidates"));
         assert!(source.contains("FileDialog"));
         assert!(source.contains("pick_folder"));
         assert!(source.contains("set_screenshot_dir"));
+    }
+
+    #[test]
+    fn screenshot_directory_button_uses_icon_only_with_hover_text() {
+        let source = include_str!("settings.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("button(\"📁\")"));
+        assert!(source.contains("on_hover_text(t!(\"choose_folder\").to_string())"));
+        assert!(!source.contains("ui.button(t!(\"choose_folder\").to_string())"));
     }
 
     #[test]

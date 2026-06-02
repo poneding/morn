@@ -23,6 +23,10 @@ mute_toggle:
   en: Mute
   zh-CN: 静音切换
   zh-TW: 靜音切換
+volume:
+  en: Volume
+  zh-CN: 音量
+  zh-TW: 音量
 fullscreen:
   en: Fullscreen
   zh-CN: 全屏

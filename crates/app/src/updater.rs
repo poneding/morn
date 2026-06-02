@@ -1,5 +1,3 @@
-#[cfg(not(target_os = "macos"))]
-use eframe::egui;
 use rust_i18n::t;
 use semver::Version;
 use serde::Deserialize;
@@ -39,13 +37,16 @@ impl UpdateChecker {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
     pub fn current_version(&self) -> &str {
         &self.current_version
     }
 
     pub fn is_checking(&self) -> bool {
         matches!(self.status, UpdateStatus::Checking)
+    }
+
+    pub fn status(&self) -> &UpdateStatus {
+        &self.status
     }
 
     pub fn begin(&mut self, include_prereleases: bool) {
@@ -60,7 +61,7 @@ impl UpdateChecker {
         });
     }
 
-    fn poll(&mut self) {
+    pub fn poll(&mut self) {
         let Some(receiver) = &self.receiver else {
             return;
         };
@@ -74,75 +75,6 @@ impl UpdateChecker {
             Err(e) => UpdateStatus::Error(e),
         };
     }
-
-    pub fn take_finished_status(&mut self) -> Option<UpdateStatus> {
-        self.poll();
-        match self.status {
-            UpdateStatus::UpToDate | UpdateStatus::Available(_) | UpdateStatus::Error(_) => {
-                Some(std::mem::replace(&mut self.status, UpdateStatus::Idle))
-            }
-            UpdateStatus::Idle | UpdateStatus::Checking => None,
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn update_window(
-    ctx: &egui::Context,
-    open: &mut bool,
-    checker: &mut UpdateChecker,
-    include_prereleases: bool,
-) {
-    checker.poll();
-    egui::Window::new(t!("check_updates").to_string())
-        .id(egui::Id::new("update_window"))
-        .open(open)
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .show(ctx, |ui| {
-            ui.label(format!(
-                "{}: {}",
-                t!("current_version"),
-                checker.current_version()
-            ));
-            ui.separator();
-
-            match &checker.status {
-                UpdateStatus::Idle => {
-                    ui.label(t!("update_ready_to_check").to_string());
-                }
-                UpdateStatus::Checking => {
-                    ui.add(egui::Spinner::new());
-                    ui.label(t!("checking_updates").to_string());
-                }
-                UpdateStatus::UpToDate => {
-                    ui.label(t!("update_up_to_date").to_string());
-                }
-                UpdateStatus::Available(update) => {
-                    let channel = if update.prerelease {
-                        t!("update_channel_beta").to_string()
-                    } else {
-                        t!("update_channel_stable").to_string()
-                    };
-                    ui.label(format!(
-                        "{}: {} ({})",
-                        t!("update_available"),
-                        update.version,
-                        channel
-                    ));
-                    ui.hyperlink_to(t!("open_release_page").to_string(), &update.html_url);
-                }
-                UpdateStatus::Error(err) => {
-                    ui.label(format!("{}: {err}", t!("update_check_failed")));
-                }
-            }
-
-            ui.separator();
-            if ui.button(t!("check_now").to_string()).clicked() {
-                checker.begin(include_prereleases);
-            }
-        });
 }
 
 #[derive(Debug, Clone, Deserialize)]

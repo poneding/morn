@@ -84,6 +84,11 @@ impl Player {
         &self.prefs
     }
 
+    /// 已解析的截图目录。支持把旧配置里的 `~` 展开为用户 Home。
+    pub fn screenshot_dir(&self) -> std::path::PathBuf {
+        persist::resolve_screenshot_dir(&self.prefs.screenshot_dir)
+    }
+
     /// 启动时恢复上次选中的视频, seek 到记忆进度后保持暂停。
     pub fn restore_last_session_paused(&mut self) -> bool {
         let Some(path) = self.playlist.current().map(|p| p.to_path_buf()) else {
@@ -126,7 +131,9 @@ impl Player {
         self.prefs.check_beta_updates = enabled && self.prefs.check_updates_on_startup;
     }
     pub fn set_screenshot_dir(&mut self, path: &str) {
-        self.prefs.screenshot_dir = path.to_string();
+        self.prefs.screenshot_dir = persist::resolve_screenshot_dir(path)
+            .to_string_lossy()
+            .into_owned();
     }
 
     fn raw_position_ms(&self) -> u64 {
@@ -675,7 +682,24 @@ mod tests {
             .unwrap();
 
         assert!(source.contains("set_screenshot_dir"));
+        assert!(source.contains("screenshot_dir(&self)"));
         assert!(source.contains("prefs.screenshot_dir"));
+    }
+
+    #[test]
+    fn screenshot_directory_accessors_resolve_legacy_tilde_path() {
+        let mut p = Player::new();
+
+        p.set_screenshot_dir("~\\Pictures\\Morn");
+
+        assert_eq!(
+            p.prefs().screenshot_dir,
+            persist::resolve_screenshot_dir("~\\Pictures\\Morn").to_string_lossy()
+        );
+        assert_eq!(
+            p.screenshot_dir(),
+            persist::resolve_screenshot_dir("~\\Pictures\\Morn")
+        );
     }
 
     #[test]

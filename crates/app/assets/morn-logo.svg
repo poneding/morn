@@ -2,19 +2,19 @@
   <title id="title">Morn centered sunrise play logo</title>
   <desc id="desc">A centered gradient sun with a centered play triangle on a dark rounded square background.</desc>
   <defs>
-    <linearGradient id="bg" x1="42" y1="32" x2="238" y2="248" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bg" x1="30.8" y1="19.5" x2="249.2" y2="260.5" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#182234"/>
       <stop offset="0.58" stop-color="#0F1724"/>
       <stop offset="1" stop-color="#070A10"/>
     </linearGradient>
-    <linearGradient id="sun" x1="86" y1="76" x2="194" y2="204" gradientUnits="userSpaceOnUse">
+    <linearGradient id="sun" x1="79.8" y1="68.6" x2="200.2" y2="211.4" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FFF6BE"/>
       <stop offset="0.36" stop-color="#FFD568"/>
       <stop offset="0.68" stop-color="#FF9558"/>
       <stop offset="1" stop-color="#FF625C"/>
     </linearGradient>
   </defs>
-  <rect x="36" y="36" width="208" height="208" rx="48" fill="url(#bg)"/>
-  <circle cx="140" cy="140" r="78" fill="url(#sun)"/>
-  <path d="M112 103c0-6 7-10 12-6l58 36c5 3 5 11 0 14l-58 36c-5 4-12 0-12-6z" fill="#111824"/>
+  <rect x="24" y="24" width="232" height="232" rx="54" fill="url(#bg)"/>
+  <circle cx="140" cy="140" r="87" fill="url(#sun)"/>
+  <path d="M108.8 98.7c0-6.7 7.8-11.2 13.4-6.7l64.7 40.2c5.6 3.3 5.6 12.3 0 15.6L122.2 188c-5.6 4.5-13.4 0-13.4-6.7z" fill="#111824"/>
 </svg>

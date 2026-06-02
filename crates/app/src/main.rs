@@ -8,9 +8,9 @@ mod playlist_panel;
 mod settings;
 mod shortcuts;
 mod subtitle_overlay;
-mod titlebar;
 mod updater;
 mod video_view;
+mod visuals;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
@@ -25,8 +25,8 @@ fn main() -> eframe::Result {
             .with_inner_size([960.0, 600.0])
             .with_min_inner_size([APP_MIN_WIDTH, APP_MIN_HEIGHT])
             .with_title("Morn")
-            .with_decorations(false)
-            .with_transparent(true)
+            .with_decorations(true)
+            .with_transparent(false)
             .with_icon(app_icon()),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
@@ -59,7 +59,7 @@ mod tests {
     }
 
     #[test]
-    fn viewport_uses_frameless_window_for_custom_titlebar() {
+    fn viewport_uses_native_window_decorations() {
         let source = include_str!("main.rs")
             .split("#[cfg(test)]")
             .next()
@@ -67,8 +67,8 @@ mod tests {
 
         assert!(source.contains("ViewportBuilder::default()"));
         assert!(source.contains(".with_title(\"Morn\")"));
-        assert!(source.contains(".with_decorations(false)"));
-        assert!(source.contains(".with_transparent(true)"));
+        assert!(source.contains(".with_decorations(true)"));
+        assert!(source.contains(".with_transparent(false)"));
         assert!(!source.contains("with_fullsize_content_view(true)"));
     }
 }

@@ -11,7 +11,10 @@ pub fn open_menu_commands() -> Vec<Command> {
 
 pub fn open_menu_button(ui: &mut egui::Ui) -> Vec<Command> {
     let mut cmds = Vec::new();
-    let button = egui::containers::menu::MenuButton::from_button(egui::Button::new(OPEN_MENU_ICON));
+    let button = egui::containers::menu::MenuButton::from_button(egui::Button::new(OPEN_MENU_ICON))
+        .config(
+            egui::containers::menu::MenuConfig::new().style(crate::visuals::frosted_popup_style()),
+        );
     let (_, menu) = button.ui(ui, |ui| {
         let mut selected = Vec::new();
         for cmd in open_menu_commands() {
@@ -64,14 +67,6 @@ pub fn playlist_panel(
             }
         });
     });
-    ui.horizontal(|ui| {
-        if ui.button(format!("⏮ {}", t!("prev"))).clicked() {
-            cmds.push(Command::Prev);
-        }
-        if ui.button(format!("{} ⏭", t!("next"))).clicked() {
-            cmds.push(Command::Next);
-        }
-    });
     cmds
 }
 
@@ -118,6 +113,7 @@ mod tests {
         assert!(!source.contains("OPEN_MENU_BUTTON_SIZE"));
         assert!(!source.contains("min_size"));
         assert!(source.contains("MenuButton"));
+        assert!(source.contains("frosted_popup_style"));
     }
 
     #[test]
@@ -139,5 +135,23 @@ mod tests {
 
         assert!(!source.contains("add_sized("));
         assert!(source.contains("min_size(egui::vec2"));
+    }
+
+    #[test]
+    fn playlist_panel_does_not_duplicate_bottom_navigation_controls() {
+        let source = include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        for removed in [
+            concat!("Command", "::", "Prev"),
+            concat!("Command", "::", "Next"),
+        ] {
+            assert!(
+                !source.contains(removed),
+                "playlist panel still exposes navigation command: {removed}"
+            );
+        }
     }
 }

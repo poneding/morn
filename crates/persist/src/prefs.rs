@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,19 +55,60 @@ impl Default for Preferences {
 }
 
 pub fn default_screenshot_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join("Pictures")
-        .join("Morn")
+    default_home_dir().join("Pictures").join("Morn")
+}
+
+/// 解析截图目录配置。只支持当前用户 Home 的 `~` 前缀, 不处理 `~other`。
+pub fn resolve_screenshot_dir(path: &str) -> PathBuf {
+    if path.is_empty() {
+        return PathBuf::new();
+    }
+    if path == "~" {
+        return default_home_dir();
+    }
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        let mut resolved = default_home_dir();
+        push_path_segments(&mut resolved, rest);
+        return resolved;
+    }
+    PathBuf::from(path)
+}
+
+fn default_home_dir() -> PathBuf {
+    home_dir_from_env(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn home_dir_from_env(home: Option<OsString>, user_profile: Option<OsString>) -> Option<PathBuf> {
+    let home = home.filter(|home| !home.is_empty());
+    let user_profile = user_profile.filter(|user_profile| !user_profile.is_empty());
+    #[cfg(windows)]
+    let selected = user_profile.or(home);
+    #[cfg(not(windows))]
+    let selected = home.or(user_profile);
+    selected.map(PathBuf::from)
 }
 
 fn default_screenshot_dir_string() -> String {
     default_screenshot_dir().to_string_lossy().into_owned()
 }
 
+fn push_path_segments(path: &mut PathBuf, rest: &str) {
+    for segment in rest
+        .split(['/', '\\'])
+        .filter(|segment| !segment.is_empty())
+    {
+        path.push(segment);
+    }
+}
+
 impl Preferences {
+    fn normalize_paths(&mut self) {
+        self.screenshot_dir = resolve_screenshot_dir(&self.screenshot_dir)
+            .to_string_lossy()
+            .into_owned();
+    }
+
     pub fn resume_point(&self, file: &str) -> Option<u64> {
         self.resume_points.get(file).copied()
     }
@@ -79,8 +121,16 @@ impl Preferences {
     pub fn load(path: &Path) -> std::io::Result<Self> {
         match std::fs::read_to_string(path) {
             // 解析失败按默认处理: 偏好属低风险数据, 不阻断启动。
-            Ok(s) => Ok(serde_json::from_str(&s).unwrap_or_default()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Ok(s) => {
+                let mut prefs: Self = serde_json::from_str(&s).unwrap_or_default();
+                prefs.normalize_paths();
+                Ok(prefs)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let mut prefs = Self::default();
+                prefs.normalize_paths();
+                Ok(prefs)
+            }
             Err(e) => Err(e),
         }
     }
@@ -90,7 +140,9 @@ impl Preferences {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        let mut prefs = self.clone();
+        prefs.normalize_paths();
+        let json = serde_json::to_string_pretty(&prefs).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 }
@@ -111,6 +163,57 @@ mod tests {
             "default screenshot dir should live under ~/Pictures/Morn"
         );
         assert!(p.resume_point("/any.mp4").is_none());
+    }
+
+    #[test]
+    fn default_home_dir_uses_platform_home_preference() {
+        #[cfg(windows)]
+        assert_eq!(
+            home_dir_from_env(
+                Some(OsString::from("C:/msys/home/example")),
+                Some(OsString::from("C:/Users/example"))
+            ),
+            Some(PathBuf::from("C:/Users/example"))
+        );
+
+        #[cfg(not(windows))]
+        assert_eq!(
+            home_dir_from_env(
+                Some(OsString::from("/home/example")),
+                Some(OsString::from("C:/Users/example"))
+            ),
+            Some(PathBuf::from("/home/example"))
+        );
+
+        assert_eq!(
+            home_dir_from_env(None, Some(OsString::from("C:/Users/example"))),
+            Some(PathBuf::from("C:/Users/example"))
+        );
+        assert_eq!(
+            home_dir_from_env(
+                Some(OsString::from("")),
+                Some(OsString::from("C:/Users/example"))
+            ),
+            Some(PathBuf::from("C:/Users/example"))
+        );
+        assert_eq!(home_dir_from_env(None, None), None);
+    }
+
+    #[test]
+    fn resolve_screenshot_dir_expands_tilde_prefix() {
+        assert_eq!(
+            resolve_screenshot_dir("~\\Pictures\\Morn"),
+            default_home_dir().join("Pictures").join("Morn")
+        );
+        assert_eq!(
+            resolve_screenshot_dir("~/Pictures/Morn"),
+            default_home_dir().join("Pictures").join("Morn")
+        );
+        assert_eq!(resolve_screenshot_dir(""), PathBuf::new());
+        assert_eq!(
+            resolve_screenshot_dir("~other/Pictures"),
+            PathBuf::from("~other/Pictures")
+        );
     }
 
     #[test]
@@ -170,6 +273,42 @@ mod tests {
         let loaded = Preferences::load(&path).unwrap();
 
         assert_eq!(loaded.volume, 55);
+        assert_eq!(
+            loaded.screenshot_dir,
+            default_screenshot_dir().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn load_legacy_tilde_screenshot_dir_expands_to_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy-tilde.json");
+        std::fs::write(
+            &path,
+            r#"{"volume":55,"window_size":[1024,768],"screenshot_dir":"~\\Pictures\\Morn"}"#,
+        )
+        .unwrap();
+
+        let loaded = Preferences::load(&path).unwrap();
+
+        assert_eq!(
+            loaded.screenshot_dir,
+            default_screenshot_dir().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn save_legacy_tilde_screenshot_dir_writes_resolved_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prefs.json");
+        let mut prefs = Preferences::default();
+        prefs.screenshot_dir = "~\\Pictures\\Morn".to_string();
+
+        prefs.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+
+        assert!(!saved.contains(r#""screenshot_dir": "~\\"#));
         assert_eq!(
             loaded.screenshot_dir,
             default_screenshot_dir().to_string_lossy()
