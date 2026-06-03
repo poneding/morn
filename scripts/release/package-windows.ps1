@@ -51,7 +51,7 @@ resources = ["$($runtime.Replace('\', '/'))/*.dll"]
 path = "morn"
 main = true
 "@
-$configPath = "dist\Packager-$Suffix.toml"
+$configPath = Join-Path (Get-Location) "Packager-$Suffix.toml"
 New-Item -ItemType Directory -Force -Path "dist" | Out-Null
 $config | Out-File -Encoding utf8 -FilePath $configPath
 
