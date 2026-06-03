@@ -239,6 +239,56 @@ impl Player {
         }
     }
 
+    fn stop_playback(&mut self) {
+        let _ = self.machine.apply(player_core::Transition::Stop);
+        self.teardown();
+    }
+
+    fn remove_playlist_index(&mut self, index: usize) {
+        let was_current = self.playlist.current_index() == Some(index);
+        let had_media = self.video.is_some() || self.duration_ms > 0;
+
+        if self.playlist.remove_index(index).is_none() {
+            return;
+        }
+
+        if !was_current {
+            return;
+        }
+
+        let Some(path) = self.playlist.current().map(|p| p.to_path_buf()) else {
+            self.stop_playback();
+            return;
+        };
+
+        if had_media {
+            self.open(&path);
+            self.pause_playback();
+        }
+    }
+
+    fn delete_playlist_file_index(&mut self, index: usize) {
+        let Some(path) = self.playlist.iter().nth(index).map(|p| p.to_path_buf()) else {
+            return;
+        };
+        self.remove_playlist_index(index);
+        let _ = std::fs::remove_file(&path);
+        let key = path.to_string_lossy().to_string();
+        self.prefs.history.retain(|p| p != &key);
+    }
+
+    fn delete_history_file_index(&mut self, index: usize) {
+        let Some(path) = self.prefs.history.get(index).cloned() else {
+            return;
+        };
+        let path_buf = std::path::PathBuf::from(&path);
+        if let Some(playlist_index) = self.playlist.iter().position(|p| p == &path_buf) {
+            self.remove_playlist_index(playlist_index);
+        }
+        let _ = std::fs::remove_file(path_buf);
+        self.prefs.history.retain(|p| p != &path);
+    }
+
     pub fn tick(&mut self) {
         if self.machine.state() != player_core::PlaybackState::Playing || self.duration_ms == 0 {
             return;
@@ -278,10 +328,18 @@ impl Player {
     pub fn handle(&mut self, cmd: Command) {
         match cmd {
             Command::Open(path) => {
-                let items = sibling_videos(&path);
-                let idx = items.iter().position(|p| *p == path).unwrap_or(0);
-                self.playlist.set_items(items, idx);
+                self.playlist.set_items(vec![path.clone()], 0);
                 self.open(&path);
+            }
+            Command::OpenFiles(paths) => {
+                let items: Vec<_> = paths
+                    .into_iter()
+                    .filter(|path| path.is_file() && is_video_ext(path))
+                    .collect();
+                if let Some(first) = items.first().cloned() {
+                    self.playlist.set_items(items, 0);
+                    self.open(&first);
+                }
             }
             Command::Play => {
                 if self.video.is_some() && self.machine.apply(player_core::Transition::Play).is_ok()
@@ -298,8 +356,7 @@ impl Player {
                 self.pause_playback();
             }
             Command::Stop => {
-                let _ = self.machine.apply(player_core::Transition::Stop);
-                self.teardown();
+                self.stop_playback();
             }
             Command::SetVolume(v) => {
                 self.muted = false;
@@ -344,6 +401,25 @@ impl Player {
                 if let Some(p) = self.playlist.current().map(|p| p.to_path_buf()) {
                     self.open(&p);
                 }
+            }
+            Command::RemovePlaylistIndex(i) => {
+                self.remove_playlist_index(i);
+            }
+            Command::ClearPlaylist => {
+                self.playlist.clear();
+                self.stop_playback();
+            }
+            Command::RemoveHistoryIndex(i) => {
+                player_core::remove_history_index(&mut self.prefs.history, i);
+            }
+            Command::ClearHistory => {
+                player_core::clear_history(&mut self.prefs.history);
+            }
+            Command::DeletePlaylistFileIndex(i) => {
+                self.delete_playlist_file_index(i);
+            }
+            Command::DeleteHistoryFileIndex(i) => {
+                self.delete_history_file_index(i);
             }
             Command::SelectSubtitleTrack(idx) => {
                 if let Some(path) = self.playlist.current().map(|p| p.to_path_buf()) {
@@ -540,25 +616,6 @@ fn clamp_rate_pct(pct: u16) -> u16 {
     pct.clamp(25, 400)
 }
 
-/// `video` 所在目录下所有视频(按文件名排序)。读失败/空则返回 [video]。
-fn sibling_videos(video: &Path) -> Vec<std::path::PathBuf> {
-    let Some(dir) = video.parent() else {
-        return vec![video.to_path_buf()];
-    };
-    let mut out: Vec<_> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && is_video_ext(p))
-        .collect();
-    if out.is_empty() {
-        return vec![video.to_path_buf()];
-    }
-    out.sort();
-    out
-}
-
 fn dir_videos(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir(dir)
         .into_iter()
@@ -644,6 +701,247 @@ mod tests {
         let mut p = Player::new();
         p.handle(Command::Play);
         assert_eq!(p.timeline().state, PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn open_file_command_does_not_expand_to_sibling_videos() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_open_single_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let a = dir.join("a.mp4");
+        let b = dir.join("b.mp4");
+        std::fs::copy(&sample, &a).unwrap();
+        std::fs::copy(&sample, &b).unwrap();
+
+        let mut p = Player::new();
+        p.handle(Command::Open(a.clone()));
+
+        assert_eq!(p.playlist_paths(), vec![a]);
+        p.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn open_files_command_uses_selected_files_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_open_files_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let a = dir.join("a.mp4");
+        let b = dir.join("b.mp4");
+        let c = dir.join("c.mp4");
+        std::fs::copy(&sample, &a).unwrap();
+        std::fs::copy(&sample, &b).unwrap();
+        std::fs::copy(&sample, &c).unwrap();
+
+        let mut p = Player::new();
+        p.handle(Command::OpenFiles(vec![b.clone(), a.clone()]));
+
+        assert_eq!(p.playlist_paths(), vec![b, a]);
+        assert_eq!(p.current_index(), Some(0));
+        p.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn remove_playlist_index_updates_restored_playlist_without_opening_media() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_remove_restored_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefs_path = dir.join("prefs.json");
+        let mut prefs = persist::Preferences::default();
+        prefs.last_playlist = vec!["/a.mp4".into(), "/b.mp4".into(), "/c.mp4".into()];
+        prefs.last_index = 1;
+        prefs.save(&prefs_path).unwrap();
+
+        let mut p = Player::with_prefs(prefs_path);
+        p.handle(Command::RemovePlaylistIndex(0));
+
+        assert_eq!(
+            p.playlist_paths(),
+            vec![
+                std::path::PathBuf::from("/b.mp4"),
+                std::path::PathBuf::from("/c.mp4")
+            ]
+        );
+        assert_eq!(p.current_index(), Some(0));
+        assert_eq!(p.timeline().state, PlaybackState::Stopped);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn removing_current_playing_item_switches_to_adjacent_paused() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_remove_current_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let a = dir.join("a.mp4");
+        let b = dir.join("b.mp4");
+        std::fs::copy(&sample, &a).unwrap();
+        std::fs::copy(&sample, &b).unwrap();
+
+        let mut p = Player::new();
+        p.handle(Command::OpenFiles(vec![a.clone(), b.clone()]));
+        assert_eq!(p.current_index(), Some(0));
+        assert_eq!(p.timeline().state, PlaybackState::Playing);
+
+        p.handle(Command::RemovePlaylistIndex(0));
+
+        assert_eq!(p.playlist_paths(), vec![b]);
+        assert_eq!(p.current_index(), Some(0));
+        assert_eq!(p.timeline().state, PlaybackState::Paused);
+        p.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn clear_playlist_stops_and_removes_items() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_clear_playlist_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let a = dir.join("a.mp4");
+        std::fs::copy(&sample, &a).unwrap();
+
+        let mut p = Player::new();
+        p.handle(Command::Open(a));
+        assert_eq!(p.timeline().state, PlaybackState::Playing);
+
+        p.handle(Command::ClearPlaylist);
+
+        assert!(p.playlist_paths().is_empty());
+        assert_eq!(p.current_index(), None);
+        assert_eq!(p.timeline().state, PlaybackState::Stopped);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn history_remove_and_clear_commands_update_history_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_history_remove_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefs_path = dir.join("prefs.json");
+        let mut prefs = persist::Preferences::default();
+        prefs.history = vec!["/a.mp4".into(), "/b.mp4".into(), "/c.mp4".into()];
+        prefs.save(&prefs_path).unwrap();
+
+        let mut p = Player::with_prefs(prefs_path);
+        p.handle(Command::RemoveHistoryIndex(1));
+        assert_eq!(p.history(), &["/a.mp4".to_string(), "/c.mp4".to_string()]);
+
+        p.handle(Command::ClearHistory);
+        assert!(p.history().is_empty());
+        assert_eq!(p.timeline().state, PlaybackState::Stopped);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn delete_current_playlist_file_removes_disk_file_and_switches_to_adjacent_paused() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_delete_current_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let a = dir.join("a.mp4");
+        let b = dir.join("b.mp4");
+        std::fs::copy(&sample, &a).unwrap();
+        std::fs::copy(&sample, &b).unwrap();
+
+        let mut p = Player::new();
+        p.handle(Command::OpenFiles(vec![a.clone(), b.clone()]));
+        assert_eq!(p.current_index(), Some(0));
+
+        p.handle(Command::DeletePlaylistFileIndex(0));
+
+        assert!(!a.exists());
+        assert_eq!(p.playlist_paths(), vec![b]);
+        assert_eq!(p.current_index(), Some(0));
+        assert_eq!(p.timeline().state, PlaybackState::Paused);
+        p.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn delete_history_file_removes_disk_file_and_history_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_delete_history_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("old.mp4");
+        std::fs::write(&file, b"old").unwrap();
+        let prefs_path = dir.join("prefs.json");
+        let mut prefs = persist::Preferences::default();
+        prefs.history = vec![file.to_string_lossy().to_string()];
+        prefs.save(&prefs_path).unwrap();
+
+        let mut p = Player::with_prefs(prefs_path);
+        p.handle(Command::DeleteHistoryFileIndex(0));
+
+        assert!(!file.exists());
+        assert!(p.history().is_empty());
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -743,14 +1041,13 @@ mod tests {
     }
 
     #[test]
-    fn sibling_videos_lists_sorted() {
-        let dir = std::env::temp_dir().join(format!("morn_sib_{}", std::process::id()));
+    fn dir_videos_lists_sorted() {
+        let dir = std::env::temp_dir().join(format!("morn_dir_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for n in ["b.mp4", "a.mp4", "note.txt", "c.mkv"] {
             std::fs::write(dir.join(n), b"x").unwrap();
         }
-        let target = dir.join("a.mp4");
-        let got = super::sibling_videos(&target);
+        let got = super::dir_videos(&dir);
         let names: Vec<_> = got
             .iter()
             .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())

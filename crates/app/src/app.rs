@@ -4,7 +4,7 @@ use eframe::egui;
 use engine::Player;
 use rust_i18n::t;
 
-#[derive(PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarTab {
     Playlist,
     History,
@@ -18,8 +18,15 @@ const CONTROLS_IDLE_HIDE_AFTER: std::time::Duration = std::time::Duration::from_
 const OVERLAY_HOVER_RECHECK_GRACE: std::time::Duration = std::time::Duration::from_millis(150);
 const PLAYLIST_BOTTOM_CONTROLS_RESERVED_HEIGHT: f32 = 60.0;
 const SCREENSHOT_NOTICE_TOP_OFFSET: f32 = 14.0;
+const SHORTCUT_NOTICE_TOP_OFFSET: f32 = 14.0;
+const SHORTCUT_NOTICE_DURATION: std::time::Duration = std::time::Duration::from_millis(1400);
 
 struct ScreenshotNotice {
+    message: String,
+    created: std::time::Instant,
+}
+
+struct ShortcutNotice {
     message: String,
     created: std::time::Instant,
 }
@@ -31,6 +38,9 @@ pub struct PlayerApp {
     show_playlist: bool,
     sidebar_tab: SidebarTab,
     screenshot_notice: Option<ScreenshotNotice>,
+    shortcut_notice: Option<ShortcutNotice>,
+    playlist_candidate: Option<usize>,
+    history_candidate: Option<usize>,
     last_pointer_pos: Option<egui::Pos2>,
     last_pointer_move: std::time::Instant,
     font_locale: String,
@@ -56,6 +66,9 @@ impl PlayerApp {
             show_playlist: false,
             sidebar_tab: SidebarTab::Playlist,
             screenshot_notice: None,
+            shortcut_notice: None,
+            playlist_candidate: None,
+            history_candidate: None,
             last_pointer_pos: None,
             last_pointer_move: std::time::Instant::now(),
             font_locale,
@@ -93,25 +106,108 @@ impl PlayerApp {
         });
     }
 
-    fn handle_command(&mut self, cmd: player_core::Command) {
+    fn show_shortcut_notice(&mut self, ctx: &egui::Context) {
+        let Some(notice) = &self.shortcut_notice else {
+            return;
+        };
+        if notice.created.elapsed() > SHORTCUT_NOTICE_DURATION {
+            self.shortcut_notice = None;
+            return;
+        }
+        let message = notice.message.clone();
+        egui::Area::new(egui::Id::new("shortcut_notice"))
+            .anchor(
+                egui::Align2::CENTER_TOP,
+                egui::vec2(0.0, SHORTCUT_NOTICE_TOP_OFFSET),
+            )
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(420.0);
+                    ui.label(message);
+                });
+            });
+    }
+
+    fn set_shortcut_notice(&mut self, message: String) {
+        self.shortcut_notice = Some(ShortcutNotice {
+            message,
+            created: std::time::Instant::now(),
+        });
+    }
+
+    fn current_playlist_name(&self) -> Option<String> {
+        self.current_playlist_path()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+    }
+
+    fn current_playlist_path(&self) -> Option<std::path::PathBuf> {
+        self.player
+            .current_index()
+            .and_then(|i| self.player.playlist_paths().get(i).cloned())
+    }
+
+    fn handle_command(&mut self, cmd: player_core::Command) -> bool {
         match cmd {
             player_core::Command::OpenDialog => {
-                if let Some(path) = rfd::FileDialog::new()
+                if let Some(paths) = rfd::FileDialog::new()
                     .add_filter(
                         t!("video_filter").to_string(),
                         &["mp4", "mkv", "webm", "mov", "avi"],
                     )
-                    .pick_file()
+                    .pick_files()
                 {
-                    self.player.handle(player_core::Command::Open(path));
+                    self.player.handle(player_core::Command::OpenFiles(paths));
+                    true
+                } else {
+                    false
                 }
             }
             player_core::Command::OpenFolder => {
                 if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                     self.player.open_folder(&dir);
+                    true
+                } else {
+                    false
                 }
             }
-            _ => self.player.handle(cmd),
+            _ => {
+                self.player.handle(cmd);
+                true
+            }
+        }
+    }
+
+    fn update_candidates_after_sidebar_command(
+        &mut self,
+        cmd: &player_core::Command,
+        playlist_len_before: usize,
+        history_len_before: usize,
+    ) {
+        match cmd {
+            player_core::Command::RemovePlaylistIndex(index)
+            | player_core::Command::DeletePlaylistFileIndex(index) => {
+                self.playlist_candidate = candidate_after_index_remove(
+                    self.playlist_candidate,
+                    *index,
+                    playlist_len_before,
+                );
+            }
+            player_core::Command::ClearPlaylist => {
+                self.playlist_candidate = None;
+            }
+            player_core::Command::RemoveHistoryIndex(index)
+            | player_core::Command::DeleteHistoryFileIndex(index) => {
+                self.history_candidate = candidate_after_index_remove(
+                    self.history_candidate,
+                    *index,
+                    history_len_before,
+                );
+            }
+            player_core::Command::ClearHistory => {
+                self.history_candidate = None;
+            }
+            _ => {}
         }
     }
 }
@@ -222,11 +318,12 @@ fn should_request_continuous_repaint(screenshot_notice_visible: bool, interactin
 }
 
 fn navigation_shortcut_command(
+    platform: crate::shortcuts::ShortcutPlatform,
     modifiers: egui::Modifiers,
     left_pressed: bool,
     right_pressed: bool,
 ) -> Option<player_core::Command> {
-    if !modifiers.command {
+    if !crate::shortcuts::navigation_modifier_pressed(platform, modifiers) {
         return None;
     }
     if left_pressed {
@@ -238,18 +335,162 @@ fn navigation_shortcut_command(
     }
 }
 
+fn rate_shortcut_command(
+    platform: crate::shortcuts::ShortcutPlatform,
+    modifiers: egui::Modifiers,
+    up_pressed: bool,
+    down_pressed: bool,
+    rate_pct: u16,
+) -> Option<player_core::Command> {
+    if !crate::shortcuts::navigation_modifier_pressed(platform, modifiers) {
+        return None;
+    }
+    if up_pressed {
+        Some(player_core::Command::SetRate(
+            crate::shortcuts::snap_rate_up(rate_pct),
+        ))
+    } else if down_pressed {
+        Some(player_core::Command::SetRate(
+            crate::shortcuts::snap_rate_down(rate_pct),
+        ))
+    } else {
+        None
+    }
+}
+
 fn settings_shortcut_pressed(modifiers: egui::Modifiers, comma_pressed: bool) -> bool {
     modifiers.command && comma_pressed
 }
 
-fn open_settings_with_shortcut(
+fn open_shortcut_pressed(modifiers: egui::Modifiers, o_pressed: bool) -> bool {
+    modifiers.command && o_pressed
+}
+
+fn opened_playlist_name_after_shortcut(
+    opened: bool,
+    after: Option<std::path::PathBuf>,
+) -> Option<String> {
+    opened.then_some(after).flatten().map(path_file_name)
+}
+
+fn toggle_settings_with_shortcut(
     show_settings: &mut bool,
     modifiers: egui::Modifiers,
     comma_pressed: bool,
-) {
+) -> bool {
     if settings_shortcut_pressed(modifiers, comma_pressed) {
-        *show_settings = true;
+        *show_settings = !*show_settings;
+        true
+    } else {
+        false
     }
+}
+
+fn playlist_shortcut_pressed(modifiers: egui::Modifiers, p_pressed: bool) -> bool {
+    modifiers.command && p_pressed
+}
+
+fn playlist_candidate_for_open(current_index: Option<usize>, playlist_len: usize) -> Option<usize> {
+    if playlist_len == 0 {
+        None
+    } else {
+        Some(current_index.unwrap_or(0).min(playlist_len - 1))
+    }
+}
+
+fn move_playlist_candidate(
+    current_candidate: Option<usize>,
+    playlist_len: usize,
+    delta: isize,
+) -> Option<usize> {
+    if current_candidate.is_none() {
+        return playlist_candidate_for_open(None, playlist_len);
+    }
+    let candidate = playlist_candidate_for_open(current_candidate, playlist_len)?;
+    let max = playlist_len.saturating_sub(1) as isize;
+    Some((candidate as isize + delta).clamp(0, max) as usize)
+}
+
+fn candidate_after_remove(current_candidate: Option<usize>, previous_len: usize) -> Option<usize> {
+    if previous_len <= 1 {
+        None
+    } else {
+        Some(current_candidate.unwrap_or(0).min(previous_len - 2))
+    }
+}
+
+fn candidate_after_index_remove(
+    current_candidate: Option<usize>,
+    removed_index: usize,
+    previous_len: usize,
+) -> Option<usize> {
+    if previous_len <= 1 {
+        return None;
+    }
+    let candidate = current_candidate.unwrap_or(0).min(previous_len - 1);
+    if removed_index < candidate {
+        Some(candidate - 1)
+    } else if removed_index == candidate {
+        candidate_after_remove(Some(candidate), previous_len)
+    } else {
+        Some(candidate)
+    }
+}
+
+fn path_file_name(path: impl AsRef<std::path::Path>) -> String {
+    path.as_ref()
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.as_ref().to_string_lossy().to_string())
+}
+
+fn toggle_playlist_with_shortcut(
+    show_playlist: &mut bool,
+    playlist_candidate: &mut Option<usize>,
+    modifiers: egui::Modifiers,
+    p_pressed: bool,
+    current_index: Option<usize>,
+    playlist_len: usize,
+) -> bool {
+    if !playlist_shortcut_pressed(modifiers, p_pressed) {
+        return false;
+    }
+    *show_playlist = !*show_playlist;
+    *playlist_candidate = if *show_playlist {
+        playlist_candidate_for_open(current_index, playlist_len)
+    } else {
+        None
+    };
+    true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EscapeShortcutAction {
+    CloseSettings,
+    ClosePlaylist,
+    ExitFullscreen,
+    None,
+}
+
+fn escape_shortcut_action(
+    show_settings: bool,
+    show_playlist: bool,
+    is_fullscreen: bool,
+) -> EscapeShortcutAction {
+    if show_settings {
+        EscapeShortcutAction::CloseSettings
+    } else if show_playlist {
+        EscapeShortcutAction::ClosePlaylist
+    } else if is_fullscreen {
+        EscapeShortcutAction::ExitFullscreen
+    } else {
+        EscapeShortcutAction::None
+    }
+}
+
+fn format_ms_label(ms: u64) -> String {
+    let total_secs = ms / 1000;
+    format!("{:02}:{:02}", total_secs / 60, total_secs % 60)
 }
 
 fn playlist_has_prev(_playlist_len: usize, current_index: Option<usize>) -> bool {
@@ -276,14 +517,20 @@ impl eframe::App for PlayerApp {
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for f in dropped {
             if let Some(path) = f.path {
-                match path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase())
-                    .as_deref()
-                {
-                    Some("srt") | Some("ass") | Some("ssa") => self.player.load_subtitle(&path),
-                    _ => self.player.handle(player_core::Command::Open(path)),
+                if path.is_dir() {
+                    self.player.open_folder(&path);
+                } else {
+                    match path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_lowercase())
+                        .as_deref()
+                    {
+                        Some("srt") | Some("ass") | Some("ssa") => self.player.load_subtitle(&path),
+                        _ => self
+                            .player
+                            .handle(player_core::Command::OpenFiles(vec![path])),
+                    }
                 }
             }
         }
@@ -293,53 +540,333 @@ impl eframe::App for PlayerApp {
         let t = self.player.timeline();
 
         let modifiers = ctx.input(|i| i.modifiers);
+        let current_index_for_shortcuts = self.player.current_index();
+        let playlist_len_for_shortcuts = self.player.playlist_paths().len();
+        let history_len_for_shortcuts = self.player.history().len();
         let comma = ctx.input(|i| i.key_pressed(egui::Key::Comma));
-        open_settings_with_shortcut(&mut self.show_settings, modifiers, comma);
+        let o_key = ctx.input(|i| i.key_pressed(egui::Key::O));
+        let p_key = ctx.input(|i| i.key_pressed(egui::Key::P));
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let mut keyboard_screenshot_requested = false;
 
-        // 键盘快捷键: Cmd/Ctrl+,=设置, Enter=全屏切换, 空格=播放/暂停, ↑↓=音量(吸附5), ←→=按步长 seek。
+        if escape {
+            let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            match escape_shortcut_action(self.show_settings, self.show_playlist, fullscreen) {
+                EscapeShortcutAction::CloseSettings => {
+                    self.show_settings = false;
+                    self.set_shortcut_notice(format!("{}：{}", t!("settings"), t!("closed")));
+                }
+                EscapeShortcutAction::ClosePlaylist => {
+                    self.show_playlist = false;
+                    self.playlist_candidate = None;
+                    self.history_candidate = None;
+                    self.set_shortcut_notice(format!("{}：{}", t!("playlist"), t!("closed")));
+                }
+                EscapeShortcutAction::ExitFullscreen => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                    self.set_shortcut_notice(t!("fullscreen_exited").to_string());
+                }
+                EscapeShortcutAction::None => {}
+            }
+        }
+
+        if toggle_settings_with_shortcut(&mut self.show_settings, modifiers, comma) {
+            let status = if self.show_settings {
+                t!("opened")
+            } else {
+                t!("closed")
+            };
+            self.set_shortcut_notice(format!("{}：{}", t!("settings"), status));
+        }
+
+        if open_shortcut_pressed(modifiers, o_key) {
+            let opened = self.handle_command(player_core::Command::OpenDialog);
+            if let Some(name) =
+                opened_playlist_name_after_shortcut(opened, self.current_playlist_path())
+            {
+                self.set_shortcut_notice(format!("{}：{}", t!("current_playing"), name));
+            }
+        }
+
+        if toggle_playlist_with_shortcut(
+            &mut self.show_playlist,
+            &mut self.playlist_candidate,
+            modifiers,
+            p_key,
+            current_index_for_shortcuts,
+            playlist_len_for_shortcuts,
+        ) {
+            self.sidebar_tab = SidebarTab::Playlist;
+            if self.show_playlist {
+                self.history_candidate = None;
+            } else {
+                self.playlist_candidate = None;
+                self.history_candidate = None;
+            }
+            let status = if self.show_playlist {
+                t!("opened")
+            } else {
+                t!("closed")
+            };
+            self.set_shortcut_notice(format!("{}：{}", t!("playlist"), status));
+        }
+
+        // 键盘快捷键: Cmd/Ctrl+,=设置, Cmd/Ctrl+P=播放列表, F/Enter=全屏, 空格=播放/暂停,
+        // M=静音, ↑↓=音量(吸附5), ←→=按步长 seek, macOS Cmd+方向键/Windows/Linux Alt+方向键控制列表与倍速。
         if !ctx.egui_wants_keyboard_input() {
+            let platform = crate::shortcuts::ShortcutPlatform::current();
             let step_ms = self.player.prefs().seek_step_secs * 1000;
             let pos = t.position_ms;
             let dur = t.duration_ms;
             let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
             let space = ctx.input(|i| i.key_pressed(egui::Key::Space));
+            let f_key = ctx.input(|i| i.key_pressed(egui::Key::F));
+            let m_key = ctx.input(|i| i.key_pressed(egui::Key::M));
+            let s_key = ctx.input(|i| i.key_pressed(egui::Key::S));
             let up = ctx.input(|i| i.key_pressed(egui::Key::ArrowUp));
             let down = ctx.input(|i| i.key_pressed(egui::Key::ArrowDown));
             let left = ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
             let right = ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
-            if enter {
-                controls::toggle_fullscreen(&ctx);
-            }
-            if space {
-                self.player
-                    .handle(if t.state == player_core::PlaybackState::Playing {
-                        player_core::Command::Pause
-                    } else {
-                        player_core::Command::Play
-                    });
-            }
-            if up {
-                self.player.handle(player_core::Command::SetVolume(
-                    crate::shortcuts::snap_volume_up(t.volume),
-                ));
-            }
-            if down {
-                self.player.handle(player_core::Command::SetVolume(
-                    crate::shortcuts::snap_volume_down(t.volume),
-                ));
-            }
-            if let Some(cmd) = navigation_shortcut_command(modifiers, left, right) {
+            let delete = ctx.input(|i| i.key_pressed(egui::Key::Delete));
+            let backspace = ctx.input(|i| i.key_pressed(egui::Key::Backspace));
+
+            let mut shortcut_handled = false;
+            if let Some(cmd) = rate_shortcut_command(platform, modifiers, up, down, t.rate_pct) {
+                let rate_pct = match cmd {
+                    player_core::Command::SetRate(pct) => pct,
+                    _ => t.rate_pct,
+                };
                 self.player.handle(cmd);
-            } else if left {
-                self.player
-                    .handle(player_core::Command::SeekTo(pos.saturating_sub(step_ms)));
-            } else if right {
+                self.set_shortcut_notice(format!(
+                    "{}：{}",
+                    t!("rate"),
+                    crate::shortcuts::format_rate_label(rate_pct)
+                ));
+                shortcut_handled = true;
+            }
+
+            if !shortcut_handled {
+                if let Some(cmd) = navigation_shortcut_command(platform, modifiers, left, right) {
+                    self.player.handle(cmd);
+                    if let Some(name) = self.current_playlist_name() {
+                        self.set_shortcut_notice(format!("{}：{}", t!("current_playing"), name));
+                    }
+                    shortcut_handled = true;
+                }
+            }
+
+            if !shortcut_handled && self.show_playlist {
+                match self.sidebar_tab {
+                    SidebarTab::Playlist => {
+                        if up {
+                            self.playlist_candidate = move_playlist_candidate(
+                                self.playlist_candidate,
+                                playlist_len_for_shortcuts,
+                                -1,
+                            );
+                            shortcut_handled = true;
+                        } else if down {
+                            self.playlist_candidate = move_playlist_candidate(
+                                self.playlist_candidate,
+                                playlist_len_for_shortcuts,
+                                1,
+                            );
+                            shortcut_handled = true;
+                        } else if enter {
+                            if let Some(candidate) = self.playlist_candidate {
+                                self.handle_command(player_core::Command::PlayIndex(candidate));
+                                self.show_playlist = false;
+                                self.playlist_candidate = None;
+                                self.history_candidate = None;
+                                if let Some(name) = self.current_playlist_name() {
+                                    self.set_shortcut_notice(format!(
+                                        "{}：{}",
+                                        t!("current_playing"),
+                                        name
+                                    ));
+                                }
+                            }
+                            shortcut_handled = true;
+                        } else if delete || backspace {
+                            if let Some(candidate) = playlist_candidate_for_open(
+                                self.playlist_candidate,
+                                playlist_len_for_shortcuts,
+                            ) {
+                                let deleting_current =
+                                    self.player.current_index() == Some(candidate);
+                                let removed_name = self
+                                    .player
+                                    .playlist_paths()
+                                    .get(candidate)
+                                    .map(path_file_name);
+                                let cmd = player_core::Command::RemovePlaylistIndex(candidate);
+                                self.handle_command(cmd);
+                                self.playlist_candidate = candidate_after_remove(
+                                    Some(candidate),
+                                    playlist_len_for_shortcuts,
+                                );
+                                if deleting_current {
+                                    if let Some(name) = self.current_playlist_name() {
+                                        self.set_shortcut_notice(format!(
+                                            "{}：{}；{}",
+                                            t!("current_playing"),
+                                            name,
+                                            t!("shortcut_paused")
+                                        ));
+                                    } else if let Some(name) = removed_name {
+                                        self.set_shortcut_notice(format!(
+                                            "{}：{}",
+                                            t!("removed"),
+                                            name
+                                        ));
+                                    }
+                                } else if let Some(name) = removed_name {
+                                    self.set_shortcut_notice(format!(
+                                        "{}：{}",
+                                        t!("removed"),
+                                        name
+                                    ));
+                                }
+                            }
+                            shortcut_handled = true;
+                        }
+                    }
+                    SidebarTab::History => {
+                        if up {
+                            self.history_candidate = move_playlist_candidate(
+                                self.history_candidate,
+                                history_len_for_shortcuts,
+                                -1,
+                            );
+                            shortcut_handled = true;
+                        } else if down {
+                            self.history_candidate = move_playlist_candidate(
+                                self.history_candidate,
+                                history_len_for_shortcuts,
+                                1,
+                            );
+                            shortcut_handled = true;
+                        } else if enter {
+                            if let Some(candidate) = self.history_candidate {
+                                if let Some(path) = self.player.history().get(candidate).cloned() {
+                                    self.handle_command(player_core::Command::Open(
+                                        std::path::PathBuf::from(path),
+                                    ));
+                                    self.show_playlist = false;
+                                    self.playlist_candidate = None;
+                                    self.history_candidate = None;
+                                    if let Some(name) = self.current_playlist_name() {
+                                        self.set_shortcut_notice(format!(
+                                            "{}：{}",
+                                            t!("current_playing"),
+                                            name
+                                        ));
+                                    }
+                                }
+                            }
+                            shortcut_handled = true;
+                        } else if delete || backspace {
+                            if let Some(candidate) = playlist_candidate_for_open(
+                                self.history_candidate,
+                                history_len_for_shortcuts,
+                            ) {
+                                let removed_name = self
+                                    .player
+                                    .history()
+                                    .get(candidate)
+                                    .map(|path| path_file_name(std::path::Path::new(path)));
+                                let cmd = player_core::Command::RemoveHistoryIndex(candidate);
+                                self.handle_command(cmd);
+                                self.history_candidate = candidate_after_remove(
+                                    Some(candidate),
+                                    history_len_for_shortcuts,
+                                );
+                                if let Some(name) = removed_name {
+                                    self.set_shortcut_notice(format!(
+                                        "{}：{}",
+                                        t!("removed"),
+                                        name
+                                    ));
+                                }
+                            }
+                            shortcut_handled = true;
+                        }
+                    }
+                }
+            }
+
+            if !shortcut_handled && (f_key || enter) {
+                let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                controls::toggle_fullscreen(&ctx);
+                self.set_shortcut_notice(if fullscreen {
+                    t!("fullscreen_exited").to_string()
+                } else {
+                    t!("fullscreen_entered").to_string()
+                });
+                shortcut_handled = true;
+            }
+            if !shortcut_handled && space {
+                let cmd = if t.state == player_core::PlaybackState::Playing {
+                    player_core::Command::Pause
+                } else {
+                    player_core::Command::Play
+                };
+                self.player.handle(cmd);
+                match self.player.timeline().state {
+                    player_core::PlaybackState::Playing => {
+                        self.set_shortcut_notice(t!("shortcut_playing").to_string());
+                    }
+                    player_core::PlaybackState::Paused => {
+                        self.set_shortcut_notice(t!("shortcut_paused").to_string());
+                    }
+                    player_core::PlaybackState::Stopped => {}
+                }
+                shortcut_handled = true;
+            }
+            if !shortcut_handled && m_key {
+                self.player.handle(player_core::Command::ToggleMute);
+                let volume = self.player.timeline().volume;
+                self.set_shortcut_notice(format!("{}：{}", t!("volume"), volume));
+                shortcut_handled = true;
+            }
+            if !shortcut_handled && s_key {
+                keyboard_screenshot_requested = true;
+                shortcut_handled = true;
+            }
+            if !shortcut_handled && up {
+                let volume = crate::shortcuts::snap_volume_up(t.volume);
+                self.player.handle(player_core::Command::SetVolume(volume));
+                self.set_shortcut_notice(format!("{}：{}", t!("volume"), volume));
+                shortcut_handled = true;
+            }
+            if !shortcut_handled && down {
+                let volume = crate::shortcuts::snap_volume_down(t.volume);
+                self.player.handle(player_core::Command::SetVolume(volume));
+                self.set_shortcut_notice(format!("{}：{}", t!("volume"), volume));
+                shortcut_handled = true;
+            }
+            if !shortcut_handled && left {
+                let target = pos.saturating_sub(step_ms);
+                self.player.handle(player_core::Command::SeekTo(target));
+                self.set_shortcut_notice(format!(
+                    "{}：{}",
+                    t!("position"),
+                    format_ms_label(target)
+                ));
+                shortcut_handled = true;
+            }
+            if !shortcut_handled && right {
                 let target = if dur > 0 {
                     (pos + step_ms).min(dur)
                 } else {
                     pos + step_ms
                 };
                 self.player.handle(player_core::Command::SeekTo(target));
+                self.set_shortcut_notice(format!(
+                    "{}：{}",
+                    t!("position"),
+                    format_ms_label(target)
+                ));
             }
         }
 
@@ -359,20 +886,25 @@ impl eframe::App for PlayerApp {
             self.last_pointer_move = now;
         }
         self.last_pointer_pos = pointer_pos;
-        let pointer_active =
-            pointer_active_inside_window(pointer_pos, screen_rect, self.last_pointer_move, now);
-        let pointer_overlay_recheck = pointer_visible_for_overlay_recheck(
-            pointer_pos,
-            screen_rect,
-            self.last_pointer_move,
-            now,
-        );
-
         let playlist_paths = self.player.playlist_paths();
         let current_index = self.player.current_index();
         let has_prev = playlist_has_prev(playlist_paths.len(), current_index);
         let has_next = playlist_has_next(playlist_paths.len(), current_index);
-        if self.show_playlist && (pointer_active || pointer_overlay_recheck) {
+        if self.show_playlist {
+            let hist: Vec<std::path::PathBuf> =
+                self.player.history().iter().map(Into::into).collect();
+            match self.sidebar_tab {
+                SidebarTab::Playlist => {
+                    self.playlist_candidate = playlist_candidate_for_open(
+                        self.playlist_candidate.or(current_index),
+                        playlist_paths.len(),
+                    );
+                }
+                SidebarTab::History => {
+                    self.history_candidate =
+                        playlist_candidate_for_open(self.history_candidate, hist.len());
+                }
+            }
             let sheet_width = playlist_sheet_width(screen_rect.width());
             let playlist_sheet_pos = egui::pos2(
                 screen_rect.max.x - sheet_width - crate::visuals::FLOATING_PANEL_MARGIN,
@@ -382,8 +914,6 @@ impl eframe::App for PlayerApp {
                 - playlist_sheet_pos.y
                 - PLAYLIST_BOTTOM_CONTROLS_RESERVED_HEIGHT)
                 .max(0.0);
-            let hist: Vec<std::path::PathBuf> =
-                self.player.history().iter().map(Into::into).collect();
             let mut playlist_commands = Vec::new();
 
             let playlist_area = egui::Area::new(egui::Id::new("playlist_sheet"))
@@ -399,6 +929,7 @@ impl eframe::App for PlayerApp {
                             ui.horizontal(|ui| {
                                 playlist_commands
                                     .extend(crate::playlist_panel::open_menu_button(ui));
+                                let tab_before = self.sidebar_tab;
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -414,6 +945,24 @@ impl eframe::App for PlayerApp {
                                         );
                                     },
                                 );
+                                if self.sidebar_tab != tab_before {
+                                    match self.sidebar_tab {
+                                        SidebarTab::Playlist => {
+                                            self.playlist_candidate = playlist_candidate_for_open(
+                                                self.playlist_candidate.or(current_index),
+                                                playlist_paths.len(),
+                                            );
+                                            self.history_candidate = None;
+                                        }
+                                        SidebarTab::History => {
+                                            self.history_candidate = playlist_candidate_for_open(
+                                                self.history_candidate,
+                                                hist.len(),
+                                            );
+                                            self.playlist_candidate = None;
+                                        }
+                                    }
+                                }
                             });
                             ui.separator();
                             match self.sidebar_tab {
@@ -423,15 +972,16 @@ impl eframe::App for PlayerApp {
                                             ui,
                                             &playlist_paths,
                                             current_index,
+                                            self.playlist_candidate,
                                         ),
                                     );
                                 }
                                 SidebarTab::History => {
-                                    if let Some(cmd) =
-                                        crate::playlist_panel::history_panel(ui, &hist)
-                                    {
-                                        playlist_commands.push(cmd);
-                                    }
+                                    playlist_commands.extend(crate::playlist_panel::history_panel(
+                                        ui,
+                                        &hist,
+                                        self.history_candidate,
+                                    ));
                                 }
                             }
                         });
@@ -444,7 +994,14 @@ impl eframe::App for PlayerApp {
             );
 
             for cmd in playlist_commands {
-                self.handle_command(cmd);
+                let playlist_len_before = self.player.playlist_paths().len();
+                let history_len_before = self.player.history().len();
+                self.handle_command(cmd.clone());
+                self.update_candidates_after_sidebar_command(
+                    &cmd,
+                    playlist_len_before,
+                    history_len_before,
+                );
             }
         }
 
@@ -459,7 +1016,7 @@ impl eframe::App for PlayerApp {
         );
 
         let mut bottom_commands = Vec::new();
-        let mut screenshot_requested = false;
+        let mut screenshot_requested = keyboard_screenshot_requested;
         let tracks = self.player.subtitle_tracks().to_vec();
         if controls_visible {
             let outer_width =
@@ -505,17 +1062,34 @@ impl eframe::App for PlayerApp {
                                 |ui| {
                                     if ui
                                         .add(egui::Button::new("⚙").selected(self.show_settings))
-                                        .on_hover_text(t!("settings").to_string())
+                                        .on_hover_text(crate::shortcuts::shortcut_tooltip(
+                                            t!("settings"),
+                                            crate::shortcuts::settings_shortcut_label(),
+                                        ))
                                         .clicked()
                                     {
                                         self.show_settings = !self.show_settings;
                                     }
                                     if ui
                                         .add(egui::Button::new("☰").selected(self.show_playlist))
-                                        .on_hover_text(t!("playlist").to_string())
+                                        .on_hover_text(crate::shortcuts::shortcut_tooltip(
+                                            t!("playlist"),
+                                            crate::shortcuts::playlist_shortcut_label(),
+                                        ))
                                         .clicked()
                                     {
                                         self.show_playlist = !self.show_playlist;
+                                        if self.show_playlist {
+                                            self.sidebar_tab = SidebarTab::Playlist;
+                                            self.playlist_candidate = playlist_candidate_for_open(
+                                                current_index,
+                                                playlist_paths.len(),
+                                            );
+                                            self.history_candidate = None;
+                                        } else {
+                                            self.playlist_candidate = None;
+                                            self.history_candidate = None;
+                                        }
                                     }
                                 },
                             );
@@ -561,6 +1135,7 @@ impl eframe::App for PlayerApp {
             &mut self.update_check,
         );
         self.show_screenshot_notice(&ctx);
+        self.show_shortcut_notice(&ctx);
 
         if self.update_check.is_checking() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -569,7 +1144,10 @@ impl eframe::App for PlayerApp {
         // 事件驱动, 避免 macOS 顶/左拉伸时 Moved 事件与 60Hz 重绘
         // 争抢合成带宽, 造成顶/左比底/右明显卡顿。
         let interacting = ctx.input(|i| i.pointer.any_down());
-        if should_request_continuous_repaint(self.screenshot_notice.is_some(), interacting) {
+        if should_request_continuous_repaint(
+            self.screenshot_notice.is_some() || self.shortcut_notice.is_some(),
+            interacting,
+        ) {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         if let Some(delay) =
@@ -1004,6 +1582,7 @@ mod tests {
         assert!(source.contains("if should_request_continuous_repaint"));
         assert!(source.contains("ctx.request_repaint_after"));
         assert!(source.contains("should_request_continuous_repaint"));
+        assert!(source.contains("self.shortcut_notice.is_some()"));
         assert!(source.contains("i.pointer.any_down()"));
         assert!(source.contains("take_frame_pending"));
     }
@@ -1014,22 +1593,50 @@ mod tests {
             command: true,
             ..Default::default()
         };
+        let alt = egui::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
         assert_eq!(
-            super::navigation_shortcut_command(command, true, false),
+            super::navigation_shortcut_command(
+                crate::shortcuts::ShortcutPlatform::Macos,
+                command,
+                true,
+                false
+            ),
             Some(player_core::Command::Prev)
         );
         assert_eq!(
-            super::navigation_shortcut_command(command, false, true),
+            super::navigation_shortcut_command(
+                crate::shortcuts::ShortcutPlatform::Macos,
+                command,
+                false,
+                true
+            ),
             Some(player_core::Command::Next)
         );
         assert_eq!(
-            super::navigation_shortcut_command(Default::default(), false, true),
+            super::navigation_shortcut_command(
+                crate::shortcuts::ShortcutPlatform::Windows,
+                alt,
+                false,
+                true
+            ),
+            Some(player_core::Command::Next)
+        );
+        assert_eq!(
+            super::navigation_shortcut_command(
+                crate::shortcuts::ShortcutPlatform::Windows,
+                command,
+                false,
+                true
+            ),
             None
         );
     }
 
     #[test]
-    fn command_or_ctrl_comma_opens_settings() {
+    fn command_or_ctrl_comma_toggles_settings() {
         let command = egui::Modifiers {
             command: true,
             ..Default::default()
@@ -1040,14 +1647,229 @@ mod tests {
         assert!(!super::settings_shortcut_pressed(Default::default(), true));
 
         let mut show_settings = false;
-        super::open_settings_with_shortcut(&mut show_settings, command, true);
+        assert!(super::toggle_settings_with_shortcut(
+            &mut show_settings,
+            command,
+            true
+        ));
         assert!(show_settings);
 
-        super::open_settings_with_shortcut(&mut show_settings, command, true);
-        assert!(
-            show_settings,
-            "shortcut opens settings instead of toggling it"
+        assert!(super::toggle_settings_with_shortcut(
+            &mut show_settings,
+            command,
+            true
+        ));
+        assert!(!show_settings);
+    }
+
+    #[test]
+    fn command_or_ctrl_p_toggles_playlist_and_initializes_candidate() {
+        let command = egui::Modifiers {
+            command: true,
+            ..Default::default()
+        };
+        let mut show_playlist = false;
+        let mut candidate = None;
+
+        assert!(super::toggle_playlist_with_shortcut(
+            &mut show_playlist,
+            &mut candidate,
+            command,
+            true,
+            Some(2),
+            4
+        ));
+        assert!(show_playlist);
+        assert_eq!(candidate, Some(2));
+
+        assert!(super::toggle_playlist_with_shortcut(
+            &mut show_playlist,
+            &mut candidate,
+            command,
+            true,
+            Some(2),
+            4
+        ));
+        assert!(!show_playlist);
+        assert_eq!(candidate, None);
+    }
+
+    #[test]
+    fn playlist_candidate_moves_with_bounds() {
+        assert_eq!(super::playlist_candidate_for_open(Some(2), 4), Some(2));
+        assert_eq!(super::playlist_candidate_for_open(None, 4), Some(0));
+        assert_eq!(super::playlist_candidate_for_open(Some(9), 4), Some(3));
+        assert_eq!(super::playlist_candidate_for_open(None, 0), None);
+
+        assert_eq!(super::move_playlist_candidate(Some(1), 4, -1), Some(0));
+        assert_eq!(super::move_playlist_candidate(Some(1), 4, 1), Some(2));
+        assert_eq!(super::move_playlist_candidate(Some(0), 4, -1), Some(0));
+        assert_eq!(super::move_playlist_candidate(Some(3), 4, 1), Some(3));
+        assert_eq!(super::move_playlist_candidate(None, 4, 1), Some(0));
+        assert_eq!(super::move_playlist_candidate(None, 0, 1), None);
+    }
+
+    #[test]
+    fn deleting_candidate_clamps_to_remaining_items() {
+        assert_eq!(super::candidate_after_remove(Some(1), 4), Some(1));
+        assert_eq!(super::candidate_after_remove(Some(3), 4), Some(2));
+        assert_eq!(super::candidate_after_remove(Some(0), 1), None);
+        assert_eq!(super::candidate_after_remove(None, 4), Some(0));
+        assert_eq!(super::candidate_after_remove(None, 0), None);
+    }
+
+    #[test]
+    fn escape_priority_closes_panels_before_exiting_fullscreen() {
+        assert_eq!(
+            super::escape_shortcut_action(true, true, true),
+            super::EscapeShortcutAction::CloseSettings
         );
+        assert_eq!(
+            super::escape_shortcut_action(false, true, true),
+            super::EscapeShortcutAction::ClosePlaylist
+        );
+        assert_eq!(
+            super::escape_shortcut_action(false, false, true),
+            super::EscapeShortcutAction::ExitFullscreen
+        );
+        assert_eq!(
+            super::escape_shortcut_action(false, false, false),
+            super::EscapeShortcutAction::None
+        );
+    }
+
+    #[test]
+    fn modified_up_down_adjust_playback_rate() {
+        let command = egui::Modifiers {
+            command: true,
+            ..Default::default()
+        };
+        let alt = egui::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            super::rate_shortcut_command(
+                crate::shortcuts::ShortcutPlatform::Macos,
+                command,
+                true,
+                false,
+                100
+            ),
+            Some(player_core::Command::SetRate(125))
+        );
+        assert_eq!(
+            super::rate_shortcut_command(
+                crate::shortcuts::ShortcutPlatform::Linux,
+                alt,
+                false,
+                true,
+                100
+            ),
+            Some(player_core::Command::SetRate(75))
+        );
+        assert_eq!(
+            super::rate_shortcut_command(
+                crate::shortcuts::ShortcutPlatform::Linux,
+                command,
+                true,
+                false,
+                100
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn app_handles_escape_playlist_enter_and_extra_single_key_shortcuts() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+
+        assert!(source.contains("key_pressed(egui::Key::Escape)"));
+        assert!(source.contains("key_pressed(egui::Key::P)"));
+        assert!(source.contains("key_pressed(egui::Key::F)"));
+        assert!(source.contains("key_pressed(egui::Key::M)"));
+        assert!(source.contains("player_core::Command::ToggleMute"));
+        assert!(source.contains("player_core::Command::PlayIndex(candidate)"));
+        assert!(source.contains("self.show_playlist = false"));
+    }
+
+    #[test]
+    fn app_handles_delete_and_backspace_for_playlist_and_history_candidates() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+
+        assert!(source.contains("key_pressed(egui::Key::Delete)"));
+        assert!(source.contains("key_pressed(egui::Key::Backspace)"));
+        assert!(source.contains("player_core::Command::RemovePlaylistIndex(candidate)"));
+        assert!(source.contains("player_core::Command::RemoveHistoryIndex(candidate)"));
+        assert!(source.contains("self.history_candidate"));
+        assert!(source.contains("candidate_after_remove"));
+    }
+
+    #[test]
+    fn s_key_requests_screenshot_from_keyboard_shortcut_path() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+
+        assert!(source.contains("key_pressed(egui::Key::S)"));
+        assert!(source.contains("keyboard_screenshot_requested = true"));
+        assert!(source.contains("let mut screenshot_requested = keyboard_screenshot_requested"));
+    }
+
+    #[test]
+    fn command_or_ctrl_o_opens_multi_file_picker() {
+        let command = egui::Modifiers {
+            command: true,
+            ..Default::default()
+        };
+
+        assert!(super::open_shortcut_pressed(command, true));
+        assert!(!super::open_shortcut_pressed(command, false));
+        assert!(!super::open_shortcut_pressed(Default::default(), true));
+
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+        assert!(source.contains("key_pressed(egui::Key::O)"));
+        assert!(source.contains("open_shortcut_pressed(modifiers, o_key)"));
+        assert!(source.contains(".pick_files()"));
+        assert!(source.contains("player_core::Command::OpenFiles(paths)"));
+        assert!(!source.contains(".pick_file()"));
+        assert!(
+            source.contains("let opened = self.handle_command(player_core::Command::OpenDialog)")
+        );
+        assert!(source.contains("opened_playlist_name_after_shortcut"));
+    }
+
+    #[test]
+    fn open_shortcut_notice_requires_dialog_selection() {
+        assert_eq!(
+            super::opened_playlist_name_after_shortcut(
+                true,
+                Some(std::path::PathBuf::from("/tmp/a.mp4"))
+            ),
+            Some("a.mp4".to_string())
+        );
+        assert_eq!(
+            super::opened_playlist_name_after_shortcut(
+                false,
+                Some(std::path::PathBuf::from("/tmp/a.mp4"))
+            ),
+            None
+        );
+        assert_eq!(super::opened_playlist_name_after_shortcut(true, None), None);
+    }
+
+    #[test]
+    fn app_tooltips_include_shortcut_descriptions_for_panel_actions() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+
+        for expected in [
+            "shortcut_tooltip",
+            "t!(\"settings\")",
+            "settings_shortcut_label",
+            "t!(\"playlist\")",
+            "playlist_shortcut_label",
+        ] {
+            assert!(source.contains(expected));
+        }
     }
 
     #[test]

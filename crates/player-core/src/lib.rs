@@ -10,4 +10,4 @@ mod playlist;
 pub use playlist::Playlist;
 
 mod history;
-pub use history::push_history;
+pub use history::{clear_history, push_history, remove_history_index};

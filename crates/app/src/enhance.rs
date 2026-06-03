@@ -18,10 +18,15 @@ pub fn enhance_bar(ui: &mut egui::Ui, rate_pct: u16) -> EnhanceActions {
     let mut screenshot = false;
     let rate_response = ui
         .button(format!("{:.2}x ▼", rate_pct as f32 / 100.0))
-        .on_hover_text(t!("rate").to_string());
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(
+            t!("rate"),
+            crate::shortcuts::rate_shortcut_label(),
+        ));
     rate_popup(&rate_response, rate_pct, &mut commands);
 
-    let screenshot_response = ui.button("📷").on_hover_text(t!("screenshot").to_string());
+    let screenshot_response = ui
+        .button("📷")
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(t!("screenshot"), "S"));
     if screenshot_response.clicked() {
         screenshot = true;
     }
@@ -138,6 +143,24 @@ mod tests {
         assert!(source.contains("FLOATING_PANEL_MARGIN"));
         assert!(!source.contains("ComboBox"));
         assert!(!source.contains("from_label"));
+    }
+
+    #[test]
+    fn enhance_tooltips_include_keyboard_shortcuts() {
+        let source = include_str!("enhance.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        for expected in [
+            "shortcut_tooltip",
+            "t!(\"rate\")",
+            "rate_shortcut_label",
+            "t!(\"screenshot\")",
+            "\"S\"",
+        ] {
+            assert!(source.contains(expected));
+        }
     }
 
     #[test]

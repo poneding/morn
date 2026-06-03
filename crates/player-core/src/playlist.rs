@@ -47,6 +47,27 @@ impl Playlist {
         }
     }
 
+    pub fn remove_index(&mut self, index: usize) -> Option<PathBuf> {
+        if index >= self.items.len() {
+            return None;
+        }
+
+        let removed = self.items.remove(index);
+        if self.items.is_empty() {
+            self.cursor = 0;
+        } else if index < self.cursor {
+            self.cursor -= 1;
+        } else if index == self.cursor {
+            self.cursor = index.min(self.items.len() - 1);
+        }
+        Some(removed)
+    }
+
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.cursor = 0;
+    }
+
     /// 用新条目替换整个列表, cursor 收敛到 [0, len)。
     pub fn set_items(&mut self, items: Vec<std::path::PathBuf>, cursor: usize) {
         self.cursor = if items.is_empty() {
@@ -160,5 +181,58 @@ mod tests {
         assert_eq!(pl.current(), Some(&p("/c.mp4")));
         pl.set_items(vec![p("/x.mp4")], 99); // 越界收敛末尾
         assert_eq!(pl.current(), Some(&p("/x.mp4")));
+    }
+
+    #[test]
+    fn remove_index_keeps_cursor_on_same_logical_item_when_possible() {
+        let mut pl = Playlist::new();
+        pl.set_items(vec![p("/a.mp4"), p("/b.mp4"), p("/c.mp4")], 1);
+
+        assert_eq!(pl.remove_index(0), Some(p("/a.mp4")));
+
+        assert_eq!(pl.current_index(), Some(0));
+        assert_eq!(pl.current(), Some(&p("/b.mp4")));
+        assert_eq!(
+            pl.iter().cloned().collect::<Vec<_>>(),
+            vec![p("/b.mp4"), p("/c.mp4")]
+        );
+    }
+
+    #[test]
+    fn remove_current_prefers_next_then_previous() {
+        let mut pl = Playlist::new();
+        pl.set_items(vec![p("/a.mp4"), p("/b.mp4"), p("/c.mp4")], 1);
+
+        assert_eq!(pl.remove_index(1), Some(p("/b.mp4")));
+        assert_eq!(pl.current_index(), Some(1));
+        assert_eq!(pl.current(), Some(&p("/c.mp4")));
+
+        assert_eq!(pl.remove_index(1), Some(p("/c.mp4")));
+        assert_eq!(pl.current_index(), Some(0));
+        assert_eq!(pl.current(), Some(&p("/a.mp4")));
+    }
+
+    #[test]
+    fn remove_last_item_leaves_empty_playlist() {
+        let mut pl = Playlist::new();
+        pl.set_items(vec![p("/a.mp4")], 0);
+
+        assert_eq!(pl.remove_index(0), Some(p("/a.mp4")));
+
+        assert_eq!(pl.len(), 0);
+        assert_eq!(pl.current_index(), None);
+        assert_eq!(pl.current(), None);
+    }
+
+    #[test]
+    fn clear_removes_all_items_and_current_selection() {
+        let mut pl = Playlist::new();
+        pl.set_items(vec![p("/a.mp4"), p("/b.mp4")], 1);
+
+        pl.clear();
+
+        assert_eq!(pl.len(), 0);
+        assert_eq!(pl.current_index(), None);
+        assert_eq!(pl.current(), None);
     }
 }

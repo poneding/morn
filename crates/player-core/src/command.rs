@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Open(PathBuf),
+    OpenFiles(Vec<PathBuf>),
     Play,
     Pause,
     Stop,
@@ -14,6 +15,12 @@ pub enum Command {
     Next,
     Prev,
     PlayIndex(usize),
+    RemovePlaylistIndex(usize),
+    ClearPlaylist,
+    RemoveHistoryIndex(usize),
+    ClearHistory,
+    DeletePlaylistFileIndex(usize),
+    DeleteHistoryFileIndex(usize),
     ToggleMute,
     OpenDialog,
     OpenFolder,
@@ -32,10 +39,32 @@ mod tests {
             Command::Open(PathBuf::from("/v.mp4")),
             Command::Open(PathBuf::from("/v.mp4"))
         );
+        assert_eq!(
+            Command::OpenFiles(vec![PathBuf::from("/a.mp4"), PathBuf::from("/b.mp4")]),
+            Command::OpenFiles(vec![PathBuf::from("/a.mp4"), PathBuf::from("/b.mp4")])
+        );
         assert_eq!(Command::SeekTo(1500), Command::SeekTo(1500));
         assert_eq!(Command::SetVolume(80), Command::SetVolume(80));
         assert_eq!(Command::SetRate(150), Command::SetRate(150));
         assert_eq!(Command::PlayIndex(2), Command::PlayIndex(2));
+        assert_eq!(
+            Command::RemovePlaylistIndex(2),
+            Command::RemovePlaylistIndex(2)
+        );
+        assert_eq!(Command::ClearPlaylist, Command::ClearPlaylist);
+        assert_eq!(
+            Command::RemoveHistoryIndex(2),
+            Command::RemoveHistoryIndex(2)
+        );
+        assert_eq!(Command::ClearHistory, Command::ClearHistory);
+        assert_eq!(
+            Command::DeletePlaylistFileIndex(2),
+            Command::DeletePlaylistFileIndex(2)
+        );
+        assert_eq!(
+            Command::DeleteHistoryFileIndex(2),
+            Command::DeleteHistoryFileIndex(2)
+        );
         assert_eq!(Command::ToggleMute, Command::ToggleMute);
         assert_eq!(Command::OpenDialog, Command::OpenDialog);
         assert_eq!(Command::OpenFolder, Command::OpenFolder);

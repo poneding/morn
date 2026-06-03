@@ -40,18 +40,13 @@ fn empty_state_contents(ui: &mut egui::Ui, commands: &mut Vec<Command>) {
     ui.vertical_centered(|ui| {
         ui.label(t!("drop_hint").to_string());
         ui.add_space(8.0);
-        if ui.button(t!("open_file").to_string()).clicked() {
-            commands.push(Command::OpenDialog);
-        }
-        if ui.button(t!("open_folder").to_string()).clicked() {
-            commands.push(Command::OpenFolder);
-        }
+        commands.extend(crate::playlist_panel::open_menu_button(ui));
     });
 }
 
 fn empty_state_top_padding(ui: &egui::Ui) -> f32 {
     let spacing = ui.spacing();
-    let content_height = spacing.interact_size.y * 3.0 + spacing.item_spacing.y * 2.0 + 8.0;
+    let content_height = spacing.interact_size.y * 2.0 + spacing.item_spacing.y + 8.0;
     ((ui.available_height() - content_height) * 0.5).max(0.0)
 }
 
@@ -338,23 +333,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_state_exposes_open_file_and_folder_actions() {
+    fn empty_state_exposes_single_open_entry() {
         let source = include_str!("video_view.rs")
             .split("#[cfg(test)]")
             .next()
             .unwrap();
 
-        for expected in [
-            concat!("Open", "Dialog"),
-            concat!("Open", "Folder"),
-            concat!("open", "_file"),
-            concat!("open", "_folder"),
-        ] {
-            assert!(
-                source.contains(expected),
-                "empty video state is missing open action: {expected}"
-            );
-        }
+        assert!(source.contains("crate::playlist_panel::open_menu_button(ui)"));
+        assert!(!source.contains("Command::OpenDialog"));
+        assert!(!source.contains("Command::OpenFolder"));
     }
 
     #[test]

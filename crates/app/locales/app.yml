@@ -47,6 +47,26 @@ history:
   en: History
   zh-CN: 历史
   zh-TW: 歷史
+remove:
+  en: Remove
+  zh-CN: 移除
+  zh-TW: 移除
+removed:
+  en: Removed
+  zh-CN: 已移除
+  zh-TW: 已移除
+clear_all:
+  en: Clear All
+  zh-CN: 全部清除
+  zh-TW: 全部清除
+more_actions:
+  en: More Actions
+  zh-CN: 更多操作
+  zh-TW: 更多操作
+delete_file:
+  en: Delete File
+  zh-CN: 删除文件
+  zh-TW: 刪除檔案
 prev:
   en: Previous
   zh-CN: 上一个
@@ -95,6 +115,38 @@ settings:
   en: Settings
   zh-CN: 设置
   zh-TW: 設定
+opened:
+  en: Opened
+  zh-CN: 已打开
+  zh-TW: 已開啟
+closed:
+  en: Closed
+  zh-CN: 已关闭
+  zh-TW: 已關閉
+current_playing:
+  en: Now Playing
+  zh-CN: 当前播放
+  zh-TW: 目前播放
+shortcut_playing:
+  en: Playing
+  zh-CN: 正在播放
+  zh-TW: 正在播放
+shortcut_paused:
+  en: Paused
+  zh-CN: 已暂停
+  zh-TW: 已暫停
+fullscreen_entered:
+  en: Fullscreen
+  zh-CN: 已全屏
+  zh-TW: 已全螢幕
+fullscreen_exited:
+  en: Exited Fullscreen
+  zh-CN: 已退出全屏
+  zh-TW: 已退出全螢幕
+position:
+  en: Position
+  zh-CN: 进度
+  zh-TW: 進度
 appearance:
   en: Appearance
   zh-CN: 外观

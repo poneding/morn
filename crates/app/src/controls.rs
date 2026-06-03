@@ -30,13 +30,25 @@ pub fn controls_bar(
 
     if ui
         .add_enabled(has_prev, egui::Button::new("⏮"))
-        .on_hover_text(t!("prev").to_string())
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(
+            t!("prev"),
+            crate::shortcuts::prev_shortcut_label(),
+        ))
         .clicked()
     {
         cmds.push(Command::Prev);
     }
     let playing = t.state == PlaybackState::Playing;
-    if ui.button(if playing { "⏸" } else { "▶" }).clicked() {
+    let play_pause_tooltip = if playing {
+        crate::shortcuts::shortcut_tooltip(t!("pause"), "Space")
+    } else {
+        crate::shortcuts::shortcut_tooltip(t!("play"), "Space")
+    };
+    if ui
+        .button(if playing { "⏸" } else { "▶" })
+        .on_hover_text(play_pause_tooltip)
+        .clicked()
+    {
         cmds.push(if playing {
             Command::Pause
         } else {
@@ -45,7 +57,10 @@ pub fn controls_bar(
     }
     if ui
         .add_enabled(has_next, egui::Button::new("⏭"))
-        .on_hover_text(t!("next").to_string())
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(
+            t!("next"),
+            crate::shortcuts::next_shortcut_label(),
+        ))
         .clicked()
     {
         cmds.push(Command::Next);
@@ -67,10 +82,17 @@ pub fn controls_bar(
 
     let volume_response = ui
         .button(mute_icon(t.muted, t.volume))
-        .on_hover_text(t!("volume").to_string());
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(t!("volume"), "↑/↓, M"));
     volume_popup(ui, &volume_response, t.volume, &mut cmds);
 
-    if ui.button("⛶").clicked() {
+    if ui
+        .button("⛶")
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(
+            t!("fullscreen"),
+            "F/Enter",
+        ))
+        .clicked()
+    {
         toggle_fullscreen(ui.ctx());
     }
 
@@ -251,6 +273,31 @@ mod tests {
         assert!(source.contains("add_enabled(has_next"));
         assert!(source.contains("Command::Prev"));
         assert!(source.contains("Command::Next"));
+    }
+
+    #[test]
+    fn controls_tooltips_include_keyboard_shortcuts() {
+        let source = include_str!("controls.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        for expected in [
+            "shortcut_tooltip",
+            "t!(\"prev\")",
+            "prev_shortcut_label",
+            "t!(\"play\")",
+            "t!(\"pause\")",
+            "Space",
+            "t!(\"next\")",
+            "next_shortcut_label",
+            "t!(\"volume\")",
+            "↑/↓, M",
+            "t!(\"fullscreen\")",
+            "F/Enter",
+        ] {
+            assert!(source.contains(expected));
+        }
     }
 
     #[test]
