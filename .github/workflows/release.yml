@@ -107,7 +107,7 @@ jobs:
             deb_arch: amd64
             rpm_arch: x86_64
             appimage_arch: x86_64
-          - asset_suffix: linux-aarch64
+          - asset_suffix: linux-arm64
             runner: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
             deb_arch: arm64
@@ -116,14 +116,14 @@ jobs:
           - asset_suffix: macos-x86_64
             runner: macos-15-intel
             rust_target: x86_64-apple-darwin
-          - asset_suffix: macos-aarch64
+          - asset_suffix: macos-arm64
             runner: macos-15
             rust_target: aarch64-apple-darwin
           - asset_suffix: windows-x86_64
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             vcpkg_triplet: x64-windows
-          - asset_suffix: windows-aarch64
+          - asset_suffix: windows-arm64
             runner: windows-11-arm
             rust_target: aarch64-pc-windows-msvc
             vcpkg_triplet: arm64-windows
