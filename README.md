@@ -65,13 +65,10 @@ cargo build --release -p app --bin morn
 仓库包含两个 GitHub Actions workflow：
 
 - `CI`：在 `master` push 和指向 `master` 的 pull request 上运行格式检查、Clippy 和测试。
-- `Release`：在推送 `vX.Y.Z` 或 `vX.Y.Z-suffix` tag 时运行检查，并在 GitHub hosted runner 上构建/上传以下 release 包：
-  - `linux-x86_64`
-  - `linux-aarch64`
-  - `macos-x86_64`
-  - `macos-aarch64`
-  - `windows-x86_64`
-  - `windows-aarch64`
+- `Release`：在推送 `vX.Y.Z` 或 `vX.Y.Z-suffix` tag 时运行检查，并在 GitHub hosted runner 上构建/上传原生安装包：
+  - Linux x86_64 / aarch64：`.deb`、`.rpm`、`.AppImage`
+  - macOS x86_64 / aarch64：`.dmg`
+  - Windows x86_64 / aarch64：`.msi`、NSIS `.exe`
 
 Release workflow 也支持在 GitHub Actions 页面手动 `workflow_dispatch`，输入已有 tag 后会重新构建并用 `--clobber` 覆盖同名 release assets。
 

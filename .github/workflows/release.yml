@@ -104,29 +104,29 @@ jobs:
           - asset_suffix: linux-x86_64
             runner: ubuntu-24.04
             rust_target: x86_64-unknown-linux-gnu
-            package_ext: tar.gz
+            deb_arch: amd64
+            rpm_arch: x86_64
+            appimage_arch: x86_64
           - asset_suffix: linux-aarch64
             runner: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
-            package_ext: tar.gz
+            deb_arch: arm64
+            rpm_arch: aarch64
+            appimage_arch: aarch64
           - asset_suffix: macos-x86_64
             runner: macos-15-intel
             rust_target: x86_64-apple-darwin
-            package_ext: tar.gz
           - asset_suffix: macos-aarch64
             runner: macos-15
             rust_target: aarch64-apple-darwin
-            package_ext: tar.gz
           - asset_suffix: windows-x86_64
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             vcpkg_triplet: x64-windows
-            package_ext: zip
           - asset_suffix: windows-aarch64
             runner: windows-11-arm
             rust_target: aarch64-pc-windows-msvc
             vcpkg_triplet: arm64-windows
-            package_ext: zip
     env:
       RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
     steps:
@@ -149,6 +149,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang \
+            curl \
+            file \
             ffmpeg \
             libasound2-dev \
             libavcodec-dev \
@@ -170,13 +172,20 @@ jobs:
             libxinerama-dev \
             libxkbcommon-dev \
             libxrandr-dev \
+            rpm \
+            ruby \
+            ruby-dev \
             pkg-config
+
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo gem install --no-document fpm
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          brew install ffmpeg pkg-config
+          brew install dylibbundler ffmpeg pkg-config
           echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "${GITHUB_ENV}"
 
       - name: Cache vcpkg binary archives
@@ -192,7 +201,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install nasm -y --no-progress
+          choco install nasm nsis wixtoolset -y --no-progress
+          cargo install cargo-packager --version 0.11.8 --locked
 
           $vcpkgRoot = Join-Path $env:RUNNER_TEMP "vcpkg"
           git clone --depth 1 https://github.com/microsoft/vcpkg $vcpkgRoot
@@ -217,38 +227,32 @@ jobs:
         shell: bash
         run: cargo build --release -p app --bin morn --target "${{ matrix.rust_target }}"
 
-      - name: Package Unix release asset
-        if: runner.os != 'Windows'
+      - name: Package Linux release assets
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          name="morn-${RELEASE_TAG}-${{ matrix.asset_suffix }}"
-          mkdir -p "dist/${name}"
-          cp "target/${{ matrix.rust_target }}/release/morn" "dist/${name}/"
-          cp README.md "dist/${name}/"
-          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          bash scripts/release/package-linux.sh \
+            "${{ matrix.rust_target }}" \
+            "${{ matrix.asset_suffix }}" \
+            "${{ matrix.deb_arch }}" \
+            "${{ matrix.rpm_arch }}" \
+            "${{ matrix.appimage_arch }}"
 
-      - name: Package Windows release asset
+      - name: Package macOS release asset
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/release/package-macos.sh "${{ matrix.rust_target }}" "${{ matrix.asset_suffix }}"
+
+      - name: Package Windows release assets
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $name = "morn-$env:RELEASE_TAG-${{ matrix.asset_suffix }}"
-          $dist = Join-Path "dist" $name
-          New-Item -ItemType Directory -Force -Path $dist | Out-Null
-          Copy-Item "target\${{ matrix.rust_target }}\release\morn.exe" $dist
-          Copy-Item "README.md" $dist
-
-          $vcpkgBin = Join-Path $env:VCPKG_ROOT "installed\${{ matrix.vcpkg_triplet }}\bin"
-          if (Test-Path $vcpkgBin) {
-            Copy-Item "$vcpkgBin\*.dll" $dist -ErrorAction SilentlyContinue
-          }
-
-          Compress-Archive -Path "$dist\*" -DestinationPath "dist\$name.zip" -Force
+        run: .\scripts\release\package-windows.ps1 -Target "${{ matrix.rust_target }}" -Suffix "${{ matrix.asset_suffix }}"
 
       - name: Upload release asset artifact
         uses: actions/upload-artifact@v4
         with:
           name: morn-${{ needs.validate.outputs.release_tag }}-${{ matrix.asset_suffix }}
-          path: dist/morn-${{ needs.validate.outputs.release_tag }}-${{ matrix.asset_suffix }}.${{ matrix.package_ext }}
+          path: dist/morn-${{ needs.validate.outputs.release_tag }}-${{ matrix.asset_suffix }}.*
           if-no-files-found: error
 
   publish:
