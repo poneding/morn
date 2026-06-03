@@ -68,7 +68,8 @@ cargo build --release -p app --bin morn
 - `Release`：在推送 `vX.Y.Z` 或 `vX.Y.Z-suffix` tag 时运行检查，并在 GitHub hosted runner 上构建/上传原生安装包：
   - Linux x86_64 / aarch64：`.deb`、`.rpm`、`.AppImage`
   - macOS x86_64 / aarch64：`.dmg`
-  - Windows x86_64 / aarch64：`.msi`、NSIS `.exe`
+  - Windows x86_64：`.msi`、NSIS `.exe`
+  - Windows aarch64：NSIS `.exe`
 
 Release workflow 也支持在 GitHub Actions 页面手动 `workflow_dispatch`，输入已有 tag 后会重新构建并用 `--clobber` 覆盖同名 release assets。
 

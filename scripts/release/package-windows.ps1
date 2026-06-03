@@ -27,6 +27,9 @@ if (Test-Path $vcpkgBin) {
     Copy-Item "$vcpkgBin\*.dll" $runtime -ErrorAction SilentlyContinue
 }
 
+$buildMsi = -not $Target.StartsWith("aarch64-")
+$formats = if ($buildMsi) { '["nsis", "wix"]' } else { '["nsis"]' }
+
 $config = @"
 name = "morn"
 product-name = "Morn"
@@ -39,7 +42,7 @@ homepage = "https://github.com/poneding/morn"
 out-dir = "dist"
 binaries-dir = "target/$Target/release"
 target-triple = "$Target"
-formats = ["nsis", "wix"]
+formats = $formats
 icons = [
   "crates/app/assets/icons/morn-logo-32.png",
   "crates/app/assets/icons/morn-logo-128.png",
@@ -56,14 +59,19 @@ New-Item -ItemType Directory -Force -Path "dist" | Out-Null
 $config | Out-File -Encoding utf8 -FilePath $configPath
 
 cargo packager --release --config $configPath
-
-$msi = Get-ChildItem -Path "dist" -Recurse -Filter "*.msi" |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-if (-not $msi) {
-    throw "cargo-packager did not produce an MSI"
+if ($LASTEXITCODE -ne 0) {
+    throw "cargo-packager failed with exit code $LASTEXITCODE"
 }
-Copy-Item $msi.FullName "dist\morn-$releaseTag-$Suffix.msi" -Force
+
+if ($buildMsi) {
+    $msi = Get-ChildItem -Path "dist" -Recurse -Filter "*.msi" |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $msi) {
+        throw "cargo-packager did not produce an MSI"
+    }
+    Copy-Item $msi.FullName "dist\morn-$releaseTag-$Suffix.msi" -Force
+}
 
 $installer = Get-ChildItem -Path "dist" -Recurse -Filter "*.exe" |
     Where-Object { $_.Name -ne "morn.exe" } |

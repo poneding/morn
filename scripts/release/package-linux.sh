@@ -9,8 +9,11 @@ appimage_arch="${5:?AppImage architecture is required}"
 release_tag="${RELEASE_TAG:?RELEASE_TAG is required}"
 
 version="${release_tag#v}"
-deb_version="${version/-/~}"
-rpm_version="${version%%-*}"
+deb_version="${version}"
+if [[ "${version}" == *-* ]]; then
+  deb_version="${version%%-*}~${version#*-}"
+fi
+rpm_version="${version%%[-+]*}"
 rpm_iteration="1"
 if [[ "${version}" == *-* ]]; then
   rpm_iteration="${version#*-}"
