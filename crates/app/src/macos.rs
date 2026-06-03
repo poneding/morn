@@ -1,5 +1,5 @@
-use objc2::msg_send;
 use objc2::rc::Retained;
+use objc2::{msg_send, ClassType};
 use objc2_app_kit::{
     NSApplication, NSBitmapImageRep, NSColor, NSDeviceRGBColorSpace, NSImage,
     NSImageNameApplicationIcon,
