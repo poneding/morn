@@ -17,8 +17,6 @@ rust_i18n::i18n!("locales", fallback = "en");
 use app::{PlayerApp, APP_MIN_HEIGHT, APP_MIN_WIDTH};
 use std::path::{Path, PathBuf};
 
-const DEFAULT_INITIAL_INNER_SIZE: [f32; 2] = [960.0, 600.0];
-
 fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     macos::install_about_metadata(env!("CARGO_PKG_VERSION"));
@@ -45,8 +43,9 @@ fn main() -> eframe::Result {
 fn startup_window_size() -> [f32; 2] {
     restored_selected_video_path(app::prefs_path())
         .and_then(|path| selected_video_dimensions(&path))
-        .and_then(|(width, height)| window_size_for_video_dimensions(width, height))
-        .unwrap_or(DEFAULT_INITIAL_INNER_SIZE)
+        .and_then(|(width, height)| app::window_size_for_video_dimensions(width, height))
+        .map(Into::into)
+        .unwrap_or(app::DEFAULT_INITIAL_INNER_SIZE)
 }
 
 fn restored_selected_video_path(prefs_path: PathBuf) -> Option<PathBuf> {
@@ -61,32 +60,6 @@ fn selected_video_dimensions(path: &Path) -> Option<(u32, u32)> {
     }
     let decoder = media::VideoDecoder::open(path).ok()?;
     Some((decoder.width(), decoder.height()))
-}
-
-fn window_size_for_video_dimensions(width: u32, height: u32) -> Option<[f32; 2]> {
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    Some(window_size_for_video_aspect(width as f32 / height as f32))
-}
-
-fn window_size_for_video_aspect(aspect: f32) -> [f32; 2] {
-    if !aspect.is_finite() || aspect <= 0.0 {
-        return DEFAULT_INITIAL_INNER_SIZE;
-    }
-
-    let mut width = DEFAULT_INITIAL_INNER_SIZE[1] * aspect;
-    let mut height = DEFAULT_INITIAL_INNER_SIZE[1];
-    if width < APP_MIN_WIDTH {
-        width = APP_MIN_WIDTH;
-        height = width / aspect;
-    }
-    if height < APP_MIN_HEIGHT {
-        height = APP_MIN_HEIGHT;
-        width = height * aspect;
-    }
-    [width, height]
 }
 
 fn app_icon() -> eframe::egui::IconData {
@@ -131,16 +104,16 @@ mod tests {
 
     #[test]
     fn startup_window_size_uses_selected_video_aspect_ratio() {
-        assert_eq!(super::window_size_for_video_dimensions(0, 120), None);
-        assert_eq!(super::window_size_for_video_dimensions(160, 0), None);
+        assert_eq!(super::app::window_size_for_video_dimensions(0, 120), None);
+        assert_eq!(super::app::window_size_for_video_dimensions(160, 0), None);
 
-        let wide = super::window_size_for_video_dimensions(1920, 1080).unwrap();
-        assert!(close_enough(wide[0], 1066.6666));
-        assert!(close_enough(wide[1], 600.0));
+        let wide = super::app::window_size_for_video_dimensions(1920, 1080).unwrap();
+        assert!(close_enough(wide.x, 1066.6666));
+        assert!(close_enough(wide.y, 600.0));
 
-        let squareish = super::window_size_for_video_dimensions(160, 120).unwrap();
-        assert!(close_enough(squareish[0], super::APP_MIN_WIDTH));
-        assert!(close_enough(squareish[1], 690.0));
+        let squareish = super::app::window_size_for_video_dimensions(160, 120).unwrap();
+        assert!(close_enough(squareish.x, super::APP_MIN_WIDTH));
+        assert!(close_enough(squareish.y, 690.0));
     }
 
     #[test]

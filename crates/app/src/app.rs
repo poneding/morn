@@ -13,6 +13,7 @@ enum SidebarTab {
 pub const APP_MIN_WIDTH: f32 = 920.0;
 pub const APP_MIN_HEIGHT: f32 = 560.0;
 pub const VIDEO_MIN_WIDTH: f32 = 640.0;
+pub(crate) const DEFAULT_INITIAL_INNER_SIZE: [f32; 2] = [960.0, 600.0];
 const CONTROL_BAR_INNER_PADDING_X: i8 = 14;
 const CONTROLS_IDLE_HIDE_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
 const OVERLAY_HOVER_RECHECK_GRACE: std::time::Duration = std::time::Duration::from_millis(150);
@@ -21,6 +22,32 @@ const PLAYLIST_SHEET_INNER_MARGIN_Y: i8 = 6;
 const SCREENSHOT_NOTICE_TOP_OFFSET: f32 = 14.0;
 const SHORTCUT_NOTICE_TOP_OFFSET: f32 = 14.0;
 const SHORTCUT_NOTICE_DURATION: std::time::Duration = std::time::Duration::from_millis(1400);
+
+pub(crate) fn window_size_for_video_dimensions(width: u32, height: u32) -> Option<egui::Vec2> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    Some(window_size_for_video_aspect(width as f32 / height as f32))
+}
+
+fn window_size_for_video_aspect(aspect: f32) -> egui::Vec2 {
+    if !aspect.is_finite() || aspect <= 0.0 {
+        return DEFAULT_INITIAL_INNER_SIZE.into();
+    }
+
+    let mut width = DEFAULT_INITIAL_INNER_SIZE[1] * aspect;
+    let mut height = DEFAULT_INITIAL_INNER_SIZE[1];
+    if width < APP_MIN_WIDTH {
+        width = APP_MIN_WIDTH;
+        height = width / aspect;
+    }
+    if height < APP_MIN_HEIGHT {
+        height = APP_MIN_HEIGHT;
+        width = height * aspect;
+    }
+    egui::vec2(width, height)
+}
 
 struct ScreenshotNotice {
     message: String,
@@ -38,6 +65,7 @@ pub struct PlayerApp {
     show_settings: bool,
     show_playlist: bool,
     playlist_auto_hidden: bool,
+    playlist_auto_hide_armed: bool,
     sidebar_tab: SidebarTab,
     screenshot_notice: Option<ScreenshotNotice>,
     shortcut_notice: Option<ShortcutNotice>,
@@ -47,6 +75,7 @@ pub struct PlayerApp {
     last_pointer_move: std::time::Instant,
     font_locale: String,
     update_check: crate::updater::UpdateChecker,
+    last_window_resized_video_path: Option<std::path::PathBuf>,
 }
 
 impl PlayerApp {
@@ -67,6 +96,7 @@ impl PlayerApp {
             show_settings: false,
             show_playlist: false,
             playlist_auto_hidden: false,
+            playlist_auto_hide_armed: true,
             sidebar_tab: SidebarTab::Playlist,
             screenshot_notice: None,
             shortcut_notice: None,
@@ -76,6 +106,7 @@ impl PlayerApp {
             last_pointer_move: std::time::Instant::now(),
             font_locale,
             update_check,
+            last_window_resized_video_path: None,
         }
     }
 
@@ -179,6 +210,20 @@ impl PlayerApp {
                 self.player.handle(cmd);
                 true
             }
+        }
+    }
+
+    fn resize_window_for_current_video(&mut self, ctx: &egui::Context) {
+        let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        let current_path = self.current_playlist_path();
+        let dimensions = self.player.current_video_dimensions();
+        if let Some(size) = video_window_resize_size(
+            &mut self.last_window_resized_video_path,
+            current_path,
+            dimensions,
+            fullscreen,
+        ) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
         }
     }
 
@@ -318,6 +363,7 @@ fn bottom_controls_visible(
 #[derive(Clone, Copy)]
 struct PlaylistAutoHideInput {
     playlist_visible: bool,
+    auto_hide_armed: bool,
     pointer_pos: Option<egui::Pos2>,
     screen_rect: egui::Rect,
     playlist_hovered: bool,
@@ -328,7 +374,7 @@ struct PlaylistAutoHideInput {
 }
 
 fn playlist_should_auto_hide(input: PlaylistAutoHideInput) -> bool {
-    if !input.playlist_visible || input.opened_this_frame {
+    if !input.playlist_visible || !input.auto_hide_armed || input.opened_this_frame {
         return false;
     }
     if !pointer_inside_window(input.pointer_pos, input.screen_rect) {
@@ -337,6 +383,22 @@ fn playlist_should_auto_hide(input: PlaylistAutoHideInput) -> bool {
     !input.playlist_hovered
         && !input.bottom_controls_hovered
         && input.now.duration_since(input.last_pointer_move) > CONTROLS_IDLE_HIDE_AFTER
+}
+
+fn update_playlist_auto_hide_armed(
+    auto_hide_armed: &mut bool,
+    show_playlist: bool,
+    opened_this_frame: bool,
+    pointer_pos: Option<egui::Pos2>,
+    screen_rect: egui::Rect,
+) {
+    if !show_playlist {
+        *auto_hide_armed = true;
+    } else if opened_this_frame {
+        *auto_hide_armed = pointer_inside_window(pointer_pos, screen_rect);
+    } else if pointer_inside_window(pointer_pos, screen_rect) {
+        *auto_hide_armed = true;
+    }
 }
 
 fn playlist_should_restore_from_auto_hide(
@@ -555,6 +617,7 @@ fn path_file_name(path: impl AsRef<std::path::Path>) -> String {
 
 fn toggle_playlist_with_shortcut(
     show_playlist: &mut bool,
+    playlist_auto_hidden: &mut bool,
     playlist_candidate: &mut Option<usize>,
     modifiers: egui::Modifiers,
     p_pressed: bool,
@@ -564,13 +627,31 @@ fn toggle_playlist_with_shortcut(
     if !playlist_shortcut_pressed(modifiers, p_pressed) {
         return false;
     }
-    *show_playlist = !*show_playlist;
+    toggle_playlist_visibility(
+        show_playlist,
+        playlist_auto_hidden,
+        playlist_candidate,
+        current_index,
+        playlist_len,
+    );
+    true
+}
+
+fn toggle_playlist_visibility(
+    show_playlist: &mut bool,
+    playlist_auto_hidden: &mut bool,
+    playlist_candidate: &mut Option<usize>,
+    current_index: Option<usize>,
+    playlist_len: usize,
+) {
+    let playlist_visible = *show_playlist && !*playlist_auto_hidden;
+    *show_playlist = !playlist_visible;
+    *playlist_auto_hidden = false;
     *playlist_candidate = if *show_playlist {
         playlist_candidate_for_open(current_index, playlist_len)
     } else {
         None
     };
-    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -608,6 +689,25 @@ fn playlist_has_prev(_playlist_len: usize, current_index: Option<usize>) -> bool
 
 fn playlist_has_next(playlist_len: usize, current_index: Option<usize>) -> bool {
     current_index.is_some_and(|index| index + 1 < playlist_len)
+}
+
+fn video_window_resize_size(
+    last_resized_video_path: &mut Option<std::path::PathBuf>,
+    current_path: Option<std::path::PathBuf>,
+    dimensions: Option<(u32, u32)>,
+    fullscreen: bool,
+) -> Option<egui::Vec2> {
+    if fullscreen {
+        return None;
+    }
+    let current_path = current_path?;
+    if last_resized_video_path.as_ref() == Some(&current_path) {
+        return None;
+    }
+    let (width, height) = dimensions?;
+    let size = window_size_for_video_dimensions(width, height)?;
+    *last_resized_video_path = Some(current_path);
+    Some(size)
 }
 
 impl eframe::App for PlayerApp {
@@ -701,6 +801,7 @@ impl eframe::App for PlayerApp {
 
         if toggle_playlist_with_shortcut(
             &mut self.show_playlist,
+            &mut self.playlist_auto_hidden,
             &mut self.playlist_candidate,
             modifiers,
             p_key,
@@ -1292,25 +1393,25 @@ impl eframe::App for PlayerApp {
                                         self.show_settings = !self.show_settings;
                                     }
                                     if ui
-                                        .add(egui::Button::new("☰").selected(self.show_playlist))
+                                        .add(egui::Button::new("☰").selected(playlist_visible))
                                         .on_hover_text(crate::shortcuts::shortcut_tooltip(
                                             t!("playlist"),
                                             crate::shortcuts::playlist_shortcut_label(),
                                         ))
                                         .clicked()
                                     {
-                                        self.show_playlist = !self.show_playlist;
-                                        self.playlist_auto_hidden = false;
+                                        toggle_playlist_visibility(
+                                            &mut self.show_playlist,
+                                            &mut self.playlist_auto_hidden,
+                                            &mut self.playlist_candidate,
+                                            current_index,
+                                            playlist_paths.len(),
+                                        );
                                         if self.show_playlist {
                                             playlist_opened_this_frame = true;
                                             self.sidebar_tab = SidebarTab::Playlist;
-                                            self.playlist_candidate = playlist_candidate_for_open(
-                                                current_index,
-                                                playlist_paths.len(),
-                                            );
                                             self.history_candidate = None;
                                         } else {
-                                            self.playlist_candidate = None;
                                             self.history_candidate = None;
                                         }
                                     }
@@ -1334,8 +1435,16 @@ impl eframe::App for PlayerApp {
         if playlist_opened_this_frame {
             self.last_pointer_move = now;
         }
+        update_playlist_auto_hide_armed(
+            &mut self.playlist_auto_hide_armed,
+            self.show_playlist,
+            playlist_opened_this_frame,
+            pointer_pos,
+            screen_rect,
+        );
         if playlist_should_auto_hide(PlaylistAutoHideInput {
             playlist_visible,
+            auto_hide_armed: self.playlist_auto_hide_armed,
             pointer_pos,
             screen_rect,
             playlist_hovered,
@@ -1367,6 +1476,8 @@ impl eframe::App for PlayerApp {
                 self.set_screenshot_notice(t!("screenshot_no_frame").to_string());
             }
         }
+
+        self.resize_window_for_current_video(&ctx);
 
         crate::settings::settings_window(
             &ctx,
@@ -1464,6 +1575,46 @@ mod tests {
             app_min_width >= playlist_min_width + video_min_width,
             "app minimum width must preserve sidebar and video minimums"
         );
+    }
+
+    #[test]
+    fn video_window_resize_tracks_current_video_once_and_waits_out_fullscreen() {
+        let wide = std::path::PathBuf::from("/wide.mp4");
+        let squareish = std::path::PathBuf::from("/squareish.mp4");
+        let mut last = None;
+
+        let first = super::video_window_resize_size(
+            &mut last,
+            Some(wide.clone()),
+            Some((1920, 1080)),
+            false,
+        )
+        .unwrap();
+        assert!((first.x - 1066.6666).abs() < 0.01);
+        assert!((first.y - 600.0).abs() < 0.01);
+        assert_eq!(last, Some(wide.clone()));
+
+        assert_eq!(
+            super::video_window_resize_size(&mut last, Some(wide), Some((1920, 1080)), false),
+            None
+        );
+
+        assert_eq!(
+            super::video_window_resize_size(
+                &mut last,
+                Some(squareish.clone()),
+                Some((160, 120)),
+                true,
+            ),
+            None
+        );
+        assert_ne!(last, Some(squareish.clone()));
+
+        let second =
+            super::video_window_resize_size(&mut last, Some(squareish), Some((160, 120)), false)
+                .unwrap();
+        assert!((second.x - super::APP_MIN_WIDTH).abs() < 0.01);
+        assert!((second.y - 690.0).abs() < 0.01);
     }
 
     #[test]
@@ -1779,6 +1930,7 @@ mod tests {
                      opened_this_frame| {
             super::PlaylistAutoHideInput {
                 playlist_visible: true,
+                auto_hide_armed: true,
                 pointer_pos,
                 screen_rect: screen,
                 playlist_hovered,
@@ -1827,6 +1979,7 @@ mod tests {
         assert!(!super::playlist_should_auto_hide(
             super::PlaylistAutoHideInput {
                 playlist_visible: false,
+                auto_hide_armed: true,
                 pointer_pos: Some(egui::pos2(640.0, 360.0)),
                 screen_rect: screen,
                 playlist_hovered: false,
@@ -1836,6 +1989,40 @@ mod tests {
                 opened_this_frame: false,
             }
         ));
+    }
+
+    #[test]
+    fn playlist_opened_while_pointer_outside_waits_for_pointer_entry_before_auto_hide() {
+        let screen = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1280.0, 720.0));
+        let mut armed = true;
+
+        super::update_playlist_auto_hide_armed(&mut armed, true, true, None, screen);
+        assert!(!armed);
+
+        super::update_playlist_auto_hide_armed(&mut armed, true, false, None, screen);
+        assert!(!armed);
+        assert!(!super::playlist_should_auto_hide(
+            super::PlaylistAutoHideInput {
+                playlist_visible: true,
+                auto_hide_armed: armed,
+                pointer_pos: None,
+                screen_rect: screen,
+                playlist_hovered: false,
+                bottom_controls_hovered: false,
+                last_pointer_move: std::time::Instant::now(),
+                now: std::time::Instant::now(),
+                opened_this_frame: false,
+            }
+        ));
+
+        super::update_playlist_auto_hide_armed(
+            &mut armed,
+            true,
+            false,
+            Some(egui::pos2(640.0, 360.0)),
+            screen,
+        );
+        assert!(armed);
     }
 
     #[test]
@@ -1922,7 +2109,7 @@ mod tests {
         assert!(!source.contains("playlist_sheet_pos"));
         assert!(!source.contains("Panel::right(\"playlist\")"));
         assert!(!source.contains("Panel::left(\"playlist\")"));
-        assert!(source.contains("self.show_playlist = !self.show_playlist"));
+        assert!(source.contains("toggle_playlist_visibility"));
     }
 
     #[test]
@@ -1993,7 +2180,7 @@ mod tests {
 
         assert!(!source.contains("crate::titlebar"));
         assert!(!source.contains("show_custom_titlebar"));
-        assert!(source.contains("self.show_playlist = !self.show_playlist"));
+        assert!(source.contains("toggle_playlist_visibility"));
         assert!(source.contains("self.show_settings = !self.show_settings"));
     }
 
@@ -2012,7 +2199,7 @@ mod tests {
         assert!(source.contains("Button::new(\"⚙\")"));
         assert!(source.contains("selected(self.show_settings)"));
         assert!(source.contains("Button::new(\"☰\")"));
-        assert!(source.contains(".selected(self.show_playlist)"));
+        assert!(source.contains(".selected(playlist_visible)"));
         assert!(source.contains("Layout::right_to_left(egui::Align::Center)"));
     }
 
@@ -2114,10 +2301,12 @@ mod tests {
             ..Default::default()
         };
         let mut show_playlist = false;
+        let mut playlist_auto_hidden = false;
         let mut candidate = None;
 
         assert!(super::toggle_playlist_with_shortcut(
             &mut show_playlist,
+            &mut playlist_auto_hidden,
             &mut candidate,
             command,
             true,
@@ -2125,10 +2314,12 @@ mod tests {
             4
         ));
         assert!(show_playlist);
+        assert!(!playlist_auto_hidden);
         assert_eq!(candidate, Some(2));
 
         assert!(super::toggle_playlist_with_shortcut(
             &mut show_playlist,
+            &mut playlist_auto_hidden,
             &mut candidate,
             command,
             true,
@@ -2136,7 +2327,33 @@ mod tests {
             4
         ));
         assert!(!show_playlist);
+        assert!(!playlist_auto_hidden);
         assert_eq!(candidate, None);
+    }
+
+    #[test]
+    fn command_or_ctrl_p_restores_auto_hidden_playlist_instead_of_closing_it() {
+        let command = egui::Modifiers {
+            command: true,
+            ..Default::default()
+        };
+        let mut show_playlist = true;
+        let mut playlist_auto_hidden = true;
+        let mut candidate = None;
+
+        assert!(super::toggle_playlist_with_shortcut(
+            &mut show_playlist,
+            &mut playlist_auto_hidden,
+            &mut candidate,
+            command,
+            true,
+            Some(1),
+            3
+        ));
+
+        assert!(show_playlist);
+        assert!(!playlist_auto_hidden);
+        assert_eq!(candidate, Some(1));
     }
 
     #[test]

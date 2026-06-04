@@ -5,10 +5,12 @@ use rust_i18n::t;
 pub const OPEN_FILE_ICON: &str = "➕";
 pub const CLEAR_ALL_ICON: &str = "🗑";
 pub const PLAYLIST_MIN_WIDTH: f32 = 220.0;
-const REMOVE_ICON: &str = "×";
 const ROW_CORNER_RADIUS: u8 = 6;
 const ROW_EXTRA_HEIGHT: f32 = 4.0;
 const ROW_TEXT_PADDING_X: f32 = 4.0;
+const ROW_ACTION_MARGIN: f32 = 4.0;
+const REMOVE_ICON_STROKE_WIDTH: f32 = 1.5;
+const REMOVE_ICON_INSET_FACTOR: f32 = 0.25;
 
 fn icon_button_size(ui: &egui::Ui, icon: &str) -> egui::Vec2 {
     let text_width = ui
@@ -120,36 +122,99 @@ pub fn clear_all_button_at(
     cmds
 }
 
-fn remove_button_at(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
-    centered_icon_button_at(ui, rect, REMOVE_ICON, ui.visuals().error_fg_color)
+fn paint_centered_x_icon(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
+    let half = rect.width().min(rect.height()) * REMOVE_ICON_INSET_FACTOR;
+    let center = rect.center();
+    let stroke = egui::Stroke::new(REMOVE_ICON_STROKE_WIDTH, color);
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x - half, center.y - half),
+            egui::pos2(center.x + half, center.y + half),
+        ],
+        stroke,
+    );
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x + half, center.y - half),
+            egui::pos2(center.x - half, center.y + half),
+        ],
+        stroke,
+    );
+}
+
+fn remove_button_at(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    remove_id: egui::Id,
+    visible: bool,
+) -> egui::Response {
+    let response = ui
+        .interact(rect, remove_id, egui::Sense::click())
         .on_hover_text(crate::shortcuts::shortcut_tooltip(
             t!("remove"),
             "Delete/Backspace",
-        ))
-        .clicked()
+        ));
+    if visible && ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter()
+            .rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+        ui.painter().rect_stroke(
+            rect,
+            visuals.corner_radius,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        paint_centered_x_icon(ui, rect, ui.visuals().error_fg_color);
+    }
+    response
 }
 
-fn row_actions_at(ui: &mut egui::Ui, row_rect: egui::Rect, remove_cmd: Command) -> Vec<Command> {
-    let mut cmds = Vec::new();
-    let remove_size = icon_button_size(ui, REMOVE_ICON);
-    let y = row_rect.center().y - remove_size.y * 0.5;
-    let remove_rect =
-        egui::Rect::from_min_size(egui::pos2(row_rect.right() - remove_size.x, y), remove_size);
+fn row_action_button_size(row_height: f32) -> egui::Vec2 {
+    let size = (row_height - ROW_ACTION_MARGIN * 2.0).max(0.0);
+    egui::vec2(size, size)
+}
 
-    if remove_button_at(ui, remove_rect) {
+fn row_actions_at(
+    ui: &mut egui::Ui,
+    row_rect: egui::Rect,
+    remove_id: egui::Id,
+    visible: bool,
+    remove_cmd: Command,
+) -> (Vec<Command>, bool) {
+    let mut cmds = Vec::new();
+    let remove_size = row_action_button_size(row_rect.height());
+    let remove_rect = egui::Rect::from_min_max(
+        egui::pos2(
+            row_rect.right() - ROW_ACTION_MARGIN - remove_size.x,
+            row_rect.top() + ROW_ACTION_MARGIN,
+        ),
+        egui::pos2(
+            row_rect.right() - ROW_ACTION_MARGIN,
+            row_rect.top() + ROW_ACTION_MARGIN + remove_size.y,
+        ),
+    );
+
+    let remove_response = remove_button_at(ui, remove_rect, remove_id, visible);
+    let remove_clicked = remove_response.clicked();
+    if remove_clicked {
         cmds.push(remove_cmd);
     }
-    cmds
+    (cmds, remove_clicked)
 }
 
-fn row_actions_width(ui: &egui::Ui) -> f32 {
-    icon_button_size(ui, REMOVE_ICON).x
+fn row_actions_width(row_height: f32) -> f32 {
+    row_action_button_size(row_height).x + ROW_ACTION_MARGIN
 }
 
-fn row_fill(ui: &egui::Ui, response: &egui::Response, selected: bool) -> Option<egui::Color32> {
-    if selected {
+fn row_fill(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    current: bool,
+    candidate: bool,
+) -> Option<egui::Color32> {
+    if current {
         Some(ui.visuals().selection.bg_fill)
-    } else if response.hovered() {
+    } else if candidate || response.hovered() {
         Some(ui.visuals().widgets.hovered.weak_bg_fill)
     } else {
         None
@@ -181,10 +246,12 @@ fn sidebar_scroll_area<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui
 
 fn playlist_row(
     ui: &mut egui::Ui,
-    selected: bool,
+    current: bool,
+    candidate: bool,
     title: &str,
     path: &std::path::Path,
     tooltip: String,
+    remove_id: egui::Id,
     play_cmd: Command,
     remove_cmd: Command,
     delete_cmd: Command,
@@ -198,15 +265,11 @@ fn playlist_row(
     let row_response = row_response.on_hover_text(tooltip);
     let show_actions = row_response.hovered() || row_response.contains_pointer();
 
-    if let Some(fill) = row_fill(ui, &row_response, selected) {
+    if let Some(fill) = row_fill(ui, &row_response, current, candidate) {
         ui.painter().rect_filled(row_rect, ROW_CORNER_RADIUS, fill);
     }
 
-    let actions_width = if show_actions {
-        row_actions_width(ui) + ROW_TEXT_PADDING_X
-    } else {
-        0.0
-    };
+    let actions_width = row_actions_width(row_height) + ROW_TEXT_PADDING_X;
     let text_rect = egui::Rect::from_min_max(
         egui::pos2(row_rect.left() + ROW_TEXT_PADDING_X, row_rect.top()),
         egui::pos2(
@@ -214,14 +277,17 @@ fn playlist_row(
             row_rect.bottom(),
         ),
     );
-    let text_color = if selected {
+    let text_color = if current {
         ui.visuals().selection.stroke.color
     } else {
         ui.visuals().text_color()
     };
     paint_row_title(ui, text_rect, title, text_color);
 
-    if row_response.clicked() {
+    let (action_cmds, remove_clicked) =
+        row_actions_at(ui, row_rect, remove_id, show_actions, remove_cmd);
+
+    if row_response.clicked() && !remove_clicked {
         cmds.push(play_cmd);
     }
     if let Some(menu) = egui::Popup::context_menu(&row_response)
@@ -246,9 +312,7 @@ fn playlist_row(
     {
         cmds.extend(menu.inner);
     }
-    if show_actions {
-        cmds.extend(row_actions_at(ui, row_rect, remove_cmd));
-    }
+    cmds.extend(action_cmds);
     cmds
 }
 
@@ -263,13 +327,16 @@ pub fn playlist_panel(
     sidebar_scroll_area(ui, |ui| {
         for (i, p) in paths.iter().enumerate() {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-            let selected = candidate.or(current) == Some(i);
+            let is_current = current == Some(i);
+            let is_candidate = candidate == Some(i);
             cmds.extend(playlist_row(
                 ui,
-                selected,
+                is_current,
+                is_candidate,
                 name,
                 p,
                 p.to_string_lossy().to_string(),
+                ui.make_persistent_id(("playlist_remove", i)),
                 Command::PlayIndex(i),
                 Command::RemovePlaylistIndex(i),
                 Command::DeletePlaylistFileIndex(i),
@@ -291,10 +358,12 @@ pub fn history_panel(
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
             cmds.extend(playlist_row(
                 ui,
+                false,
                 candidate == Some(i),
                 name,
                 p,
                 p.to_string_lossy().to_string(),
+                ui.make_persistent_id(("history_remove", i)),
                 Command::Open(p.clone()),
                 Command::RemoveHistoryIndex(i),
                 Command::DeleteHistoryFileIndex(i),
@@ -387,7 +456,32 @@ mod tests {
             .unwrap();
 
         assert!(source.contains("candidate: Option<usize>"));
-        assert!(source.contains("candidate.or(current) == Some(i)"));
+        assert!(source.contains("let is_current = current == Some(i)"));
+        assert!(source.contains("let is_candidate = candidate == Some(i)"));
+        assert!(!source.contains("candidate.or(current) == Some(i)"));
+    }
+
+    #[test]
+    fn playlist_uses_blue_only_for_current_and_gray_for_candidate_or_hover() {
+        let source = include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let row_fill_source = source
+            .split("fn row_fill")
+            .nth(1)
+            .unwrap()
+            .split("fn paint_row_title")
+            .next()
+            .unwrap();
+
+        assert!(row_fill_source.contains("current: bool"));
+        assert!(row_fill_source.contains("candidate: bool"));
+        assert!(row_fill_source.contains("if current"));
+        assert!(row_fill_source.contains("candidate || response.hovered()"));
+        assert!(row_fill_source.contains("ui.visuals().widgets.hovered.weak_bg_fill"));
+        assert!(source.contains("let text_color = if current"));
+        assert!(!source.contains("let text_color = if selected"));
     }
 
     #[test]
@@ -407,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn playlist_row_actions_only_show_remove_on_hover() {
+    fn playlist_row_actions_only_paint_remove_on_hover() {
         let source = include_str!("playlist_panel.rs")
             .split("#[cfg(test)]")
             .next()
@@ -415,14 +509,76 @@ mod tests {
 
         assert!(source.contains("row_response.hovered()"));
         assert!(source.contains("row_actions_at"));
-        assert!(source.contains("centered_icon_button_at(ui, rect, REMOVE_ICON"));
+        assert!(source.contains("visible && ui.is_rect_visible(rect)"));
+        assert!(source.contains("paint_centered_x_icon(ui, rect, ui.visuals().error_fg_color)"));
         assert!(source.contains("ui.visuals().error_fg_color"));
-        assert!(source.contains("row_actions_width(ui) + ROW_TEXT_PADDING_X"));
+        assert!(source.contains("row_actions_width(row_height) + ROW_TEXT_PADDING_X"));
+        assert!(
+            source.contains("row_actions_at(ui, row_rect, remove_id, show_actions, remove_cmd)")
+        );
         assert!(!source.contains("ui.add_space(actions_width)"));
         assert!(!source.contains("MenuButton::from_button"));
         assert!(!source.contains("MORE_ACTIONS_ICON"));
         assert!(!source.contains("more_actions_button_at"));
         assert!(!source.contains("t!(\"more_actions\")"));
+    }
+
+    #[test]
+    fn playlist_remove_button_is_square_inset_and_does_not_shift_text_on_hover() {
+        let source = include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("const ROW_ACTION_MARGIN: f32 = 4.0"));
+        assert!(source.contains("fn row_action_button_size(row_height: f32) -> egui::Vec2"));
+        assert!(source.contains("egui::vec2(size, size)"));
+        assert!(source.contains("row_rect.top() + ROW_ACTION_MARGIN"));
+        assert!(source.contains("row_rect.right() - ROW_ACTION_MARGIN"));
+        assert!(source.contains("row_actions_width(row_height) + ROW_TEXT_PADDING_X"));
+        assert!(!source.contains("let actions_width = if show_actions"));
+        assert!(!source.contains("icon_button_size(ui, REMOVE_ICON)"));
+    }
+
+    #[test]
+    fn playlist_remove_button_draws_centered_x_without_text_glyph() {
+        let source = include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("fn paint_centered_x_icon"));
+        assert!(source.contains("line_segment"));
+        assert!(source.contains("const REMOVE_ICON_STROKE_WIDTH: f32 = 1.5"));
+        assert!(source.contains("const REMOVE_ICON_INSET_FACTOR: f32 = 0.25"));
+        assert!(!source.contains("centered_icon_button_at(ui, rect, REMOVE_ICON"));
+    }
+
+    #[test]
+    fn playlist_remove_action_does_not_allocate_extra_layout_on_hover() {
+        let source = include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let action_source = source
+            .split("fn row_actions_at")
+            .nth(1)
+            .unwrap()
+            .split("fn row_actions_width")
+            .next()
+            .unwrap();
+        let remove_button_source = source
+            .split("fn remove_button_at")
+            .nth(1)
+            .unwrap()
+            .split("fn row_action_button_size")
+            .next()
+            .unwrap();
+
+        assert!(remove_button_source.contains(".interact("));
+        assert!(action_source.contains("remove_id"));
+        assert!(!action_source.contains("allocate_rect"));
+        assert!(!source.contains("if show_actions {\n        cmds.extend(row_actions_at"));
     }
 
     #[test]
@@ -437,7 +593,8 @@ mod tests {
         assert!(source.contains("const ROW_CORNER_RADIUS: u8 = 6"));
         assert!(source.contains("let row_height = row_height + ROW_EXTRA_HEIGHT"));
         assert!(source.contains("rect_filled(row_rect, ROW_CORNER_RADIUS, fill)"));
-        assert!(source.contains("row_rect.center().y - remove_size.y * 0.5"));
+        assert!(source.contains("row_rect.top() + ROW_ACTION_MARGIN"));
+        assert!(source.contains("row_rect.right() - ROW_ACTION_MARGIN"));
     }
 
     #[test]

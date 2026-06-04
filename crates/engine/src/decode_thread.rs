@@ -16,6 +16,7 @@ pub enum FramePull {
 }
 
 pub struct DecodeThread {
+    dimensions: (u32, u32),
     rx: Receiver<VideoFrame>,
     seek_tx: Sender<u64>,
     stop: Arc<AtomicBool>,
@@ -28,7 +29,9 @@ pub struct DecodeThread {
 impl DecodeThread {
     /// 启动解码线程, `queue_cap` 为有界队列容量(背压上限)。
     pub fn spawn(path: &Path, queue_cap: usize) -> Result<Self, MediaError> {
-        drop(VideoDecoder::open(path)?); // 在调用线程先验证可打开
+        let decoder = VideoDecoder::open(path)?; // 在调用线程先验证可打开
+        let dimensions = (decoder.width(), decoder.height());
+        drop(decoder);
         let owned_path = path.to_path_buf(); // VideoDecoder !Send, 移动路径而非解码器
         let (tx, rx): (Sender<VideoFrame>, Receiver<VideoFrame>) = bounded(queue_cap);
         let (seek_tx, seek_rx) = crossbeam_channel::unbounded::<u64>();
@@ -81,6 +84,7 @@ impl DecodeThread {
         });
 
         Ok(Self {
+            dimensions,
             rx,
             seek_tx,
             stop,
@@ -112,6 +116,10 @@ impl DecodeThread {
     /// 非阻塞取帧; 无帧返回 None。UI 线程用这个避免卡顿。
     pub fn try_recv_frame(&self) -> Option<VideoFrame> {
         self.rx.try_recv().ok()
+    }
+
+    pub fn dimensions(&self) -> (u32, u32) {
+        self.dimensions
     }
 
     /// 请求 seek 到目标毫秒, 由解码线程在下一轮循环开头应用。
@@ -197,6 +205,17 @@ mod tests {
             observed,
             "frame_pending flag was never set within 3s of decoding"
         );
+        handle.stop();
+    }
+
+    #[test]
+    fn exposes_video_dimensions_after_spawn() {
+        let path = fixture();
+        assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
+
+        let handle = DecodeThread::spawn(&path, 8).unwrap();
+
+        assert_eq!(handle.dimensions(), (160, 120));
         handle.stop();
     }
 }

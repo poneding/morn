@@ -164,6 +164,10 @@ impl Player {
         self.video.as_ref()
     }
 
+    pub fn current_video_dimensions(&self) -> Option<(u32, u32)> {
+        self.video.as_ref().map(DecodeThread::dimensions)
+    }
+
     pub fn playlist_paths(&self) -> Vec<std::path::PathBuf> {
         self.playlist.iter().map(|p| p.to_path_buf()).collect()
     }
@@ -689,6 +693,10 @@ mod tests {
     use super::*;
     use player_core::{Command, PlaybackState};
 
+    fn fixture() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../media/tests/fixtures/sample.mp4")
+    }
+
     #[test]
     fn new_player_is_stopped_with_default_volume() {
         let p = Player::new();
@@ -710,6 +718,21 @@ mod tests {
         let mut p = Player::new();
         p.handle(Command::SetRate(175));
         assert_eq!(p.timeline().rate_pct, 175);
+    }
+
+    #[test]
+    fn current_video_dimensions_follow_opened_media() {
+        let path = fixture();
+        assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
+
+        let mut p = Player::new();
+        assert_eq!(p.current_video_dimensions(), None);
+
+        p.handle(Command::Open(path));
+
+        assert_eq!(p.current_video_dimensions(), Some((160, 120)));
+        p.handle(Command::Stop);
+        assert_eq!(p.current_video_dimensions(), None);
     }
 
     #[test]
