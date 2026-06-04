@@ -19,6 +19,8 @@ pub enum Command {
     ClearPlaylist,
     RemoveHistoryIndex(usize),
     ClearHistory,
+    RevealFile(PathBuf),
+    OpenSiblingVideos(PathBuf),
     DeletePlaylistFileIndex(usize),
     DeleteHistoryFileIndex(usize),
     ToggleMute,
@@ -57,6 +59,14 @@ mod tests {
             Command::RemoveHistoryIndex(2)
         );
         assert_eq!(Command::ClearHistory, Command::ClearHistory);
+        assert_eq!(
+            Command::RevealFile(PathBuf::from("/a.mp4")),
+            Command::RevealFile(PathBuf::from("/a.mp4"))
+        );
+        assert_eq!(
+            Command::OpenSiblingVideos(PathBuf::from("/a.mp4")),
+            Command::OpenSiblingVideos(PathBuf::from("/a.mp4"))
+        );
         assert_eq!(
             Command::DeletePlaylistFileIndex(2),
             Command::DeletePlaylistFileIndex(2)

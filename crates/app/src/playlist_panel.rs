@@ -2,79 +2,126 @@ use eframe::egui;
 use player_core::Command;
 use rust_i18n::t;
 
-pub const OPEN_MENU_ICON: &str = "➕";
+pub const OPEN_FILE_ICON: &str = "➕";
+pub const CLEAR_ALL_ICON: &str = "🗑";
 pub const PLAYLIST_MIN_WIDTH: f32 = 220.0;
-const ROW_ACTION_BUTTONS: f32 = 2.0;
+const REMOVE_ICON: &str = "×";
+const ROW_CORNER_RADIUS: u8 = 6;
+const ROW_EXTRA_HEIGHT: f32 = 4.0;
+const ROW_TEXT_PADDING_X: f32 = 4.0;
 
-pub fn open_menu_commands() -> Vec<Command> {
-    vec![Command::OpenDialog, Command::OpenFolder]
-}
-
-pub fn open_menu_button(ui: &mut egui::Ui) -> Vec<Command> {
-    let mut cmds = Vec::new();
-    ui.horizontal(|ui| {
-        let button_response = ui.add(egui::Button::new(OPEN_MENU_ICON)).on_hover_text(
-            crate::shortcuts::shortcut_tooltip(
-                t!("open_file"),
-                crate::shortcuts::open_shortcut_label(),
-            ),
-        );
-        if button_response.clicked() {
-            cmds.push(Command::OpenDialog);
-        }
-
-        let menu_button = egui::containers::menu::MenuButton::from_button(egui::Button::new("▾"))
-            .config(
-                egui::containers::menu::MenuConfig::new()
-                    .style(crate::visuals::frosted_popup_style()),
-            );
-        let (menu_response, menu) = menu_button.ui(ui, |ui| {
-            let mut selected = Vec::new();
-            for cmd in open_menu_commands() {
-                let tooltip = match cmd {
-                    Command::OpenDialog => crate::shortcuts::shortcut_tooltip(
-                        t!("open_file"),
-                        crate::shortcuts::open_shortcut_label(),
-                    ),
-                    Command::OpenFolder => t!("open_folder").to_string(),
-                    _ => continue,
-                };
-                if ui.button(tooltip).clicked() {
-                    selected.push(cmd);
-                    ui.close();
-                }
-            }
-            selected
-        });
-        menu_response.on_hover_text(t!("open_folder").to_string());
-        if let Some(menu) = menu {
-            cmds.extend(menu.inner);
-        }
-    });
-    cmds
-}
-
-fn row_actions_width(ui: &egui::Ui) -> f32 {
-    ui.spacing().interact_size.x * ROW_ACTION_BUTTONS
-        + ui.spacing().item_spacing.x * ROW_ACTION_BUTTONS
-}
-
-fn playlist_item_button(
-    ui: &mut egui::Ui,
-    selected: bool,
-    title: &str,
-    actions_width: f32,
-) -> egui::Response {
-    let width = (ui.available_width() - actions_width).max(0.0);
-    ui.add(
-        egui::Button::selectable(selected, title)
-            .truncate()
-            .min_size(egui::vec2(width, ui.spacing().interact_size.y)),
+fn icon_button_size(ui: &egui::Ui, icon: &str) -> egui::Vec2 {
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(
+            icon.to_owned(),
+            egui::TextStyle::Button.resolve(ui.style()),
+            ui.visuals().text_color(),
+        )
+        .size()
+        .x;
+    egui::vec2(
+        text_width + ui.spacing().button_padding.x * 2.0,
+        ui.spacing().interact_size.y,
     )
 }
 
-fn remove_button(ui: &mut egui::Ui) -> bool {
-    ui.add(egui::Button::new("×"))
+fn adaptive_icon_button(ui: &egui::Ui, icon: &'static str) -> egui::Button<'static> {
+    egui::Button::new(icon).min_size(icon_button_size(ui, icon))
+}
+
+fn centered_icon_button_at(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    icon: &str,
+    color: egui::Color32,
+) -> egui::Response {
+    let response = ui.allocate_rect(rect, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter()
+            .rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+        ui.painter().rect_stroke(
+            rect,
+            visuals.corner_radius,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+
+        let galley = ui.painter().layout_no_wrap(
+            icon.to_owned(),
+            egui::TextStyle::Button.resolve(ui.style()),
+            color,
+        );
+        let text_pos = egui::pos2(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        );
+        ui.painter().galley(text_pos, galley, color);
+    }
+    response
+}
+
+pub fn open_file_button_size(ui: &egui::Ui) -> egui::Vec2 {
+    icon_button_size(ui, OPEN_FILE_ICON)
+}
+
+pub fn clear_all_button_size(ui: &egui::Ui) -> egui::Vec2 {
+    icon_button_size(ui, CLEAR_ALL_ICON)
+}
+
+pub fn open_file_button(ui: &mut egui::Ui) -> Vec<Command> {
+    let mut cmds = Vec::new();
+    let button_response = ui
+        .add(adaptive_icon_button(ui, OPEN_FILE_ICON))
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(
+            t!("open_file"),
+            crate::shortcuts::open_shortcut_label(),
+        ));
+    if button_response.clicked() {
+        cmds.push(Command::OpenDialog);
+    }
+    cmds
+}
+
+pub fn open_file_button_at(ui: &mut egui::Ui, rect: egui::Rect) -> Vec<Command> {
+    let mut cmds = Vec::new();
+    let button_response = ui
+        .put(rect, adaptive_icon_button(ui, OPEN_FILE_ICON))
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(
+            t!("open_file"),
+            crate::shortcuts::open_shortcut_label(),
+        ));
+    if button_response.clicked() {
+        cmds.push(Command::OpenDialog);
+    }
+    cmds
+}
+
+pub fn clear_all_button_at(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    cmd: Command,
+    enabled: bool,
+) -> Vec<Command> {
+    let mut cmds = Vec::new();
+    let response = if enabled {
+        centered_icon_button_at(ui, rect, CLEAR_ALL_ICON, ui.visuals().text_color())
+    } else {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect).disabled(), |ui| {
+            centered_icon_button_at(ui, rect, CLEAR_ALL_ICON, ui.visuals().weak_text_color())
+        })
+        .inner
+    }
+    .on_hover_text(t!("clear_all").to_string());
+    if enabled && response.clicked() {
+        cmds.push(cmd);
+    }
+    cmds
+}
+
+fn remove_button_at(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
+    centered_icon_button_at(ui, rect, REMOVE_ICON, ui.visuals().error_fg_color)
         .on_hover_text(crate::shortcuts::shortcut_tooltip(
             t!("remove"),
             "Delete/Backspace",
@@ -82,81 +129,127 @@ fn remove_button(ui: &mut egui::Ui) -> bool {
         .clicked()
 }
 
-fn more_actions_button(ui: &mut egui::Ui, delete_cmd: Command) -> Vec<Command> {
+fn row_actions_at(ui: &mut egui::Ui, row_rect: egui::Rect, remove_cmd: Command) -> Vec<Command> {
     let mut cmds = Vec::new();
-    let button = egui::containers::menu::MenuButton::from_button(egui::Button::new("⋯")).config(
-        egui::containers::menu::MenuConfig::new().style(crate::visuals::frosted_popup_style()),
-    );
-    let (response, menu) = button.ui(ui, |ui| {
-        let mut selected = Vec::new();
-        if ui.button(t!("delete_file").to_string()).clicked() {
-            selected.push(delete_cmd);
-            ui.close();
-        }
-        selected
-    });
-    response.on_hover_text(t!("more_actions").to_string());
-    if let Some(menu) = menu {
-        cmds.extend(menu.inner);
+    let remove_size = icon_button_size(ui, REMOVE_ICON);
+    let y = row_rect.center().y - remove_size.y * 0.5;
+    let remove_rect =
+        egui::Rect::from_min_size(egui::pos2(row_rect.right() - remove_size.x, y), remove_size);
+
+    if remove_button_at(ui, remove_rect) {
+        cmds.push(remove_cmd);
     }
     cmds
 }
 
-fn row_actions(ui: &mut egui::Ui, remove_cmd: Command, delete_cmd: Command) -> Vec<Command> {
-    let mut cmds = Vec::new();
-    if remove_button(ui) {
-        cmds.push(remove_cmd);
+fn row_actions_width(ui: &egui::Ui) -> f32 {
+    icon_button_size(ui, REMOVE_ICON).x
+}
+
+fn row_fill(ui: &egui::Ui, response: &egui::Response, selected: bool) -> Option<egui::Color32> {
+    if selected {
+        Some(ui.visuals().selection.bg_fill)
+    } else if response.hovered() {
+        Some(ui.visuals().widgets.hovered.weak_bg_fill)
+    } else {
+        None
     }
-    cmds.extend(more_actions_button(ui, delete_cmd));
-    cmds
+}
+
+fn paint_row_title(ui: &egui::Ui, rect: egui::Rect, title: &str, color: egui::Color32) {
+    let galley = egui::WidgetText::from(title.to_owned()).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        rect.width().max(0.0),
+        egui::TextStyle::Body,
+    );
+    let text_pos = egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5);
+    ui.painter().galley(text_pos, galley, color);
+}
+
+fn sidebar_scroll_area<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::ScrollArea::vertical()
+        .max_width(ui.available_width())
+        .max_height(ui.available_height())
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add_contents(ui)
+        })
+        .inner
 }
 
 fn playlist_row(
     ui: &mut egui::Ui,
     selected: bool,
     title: &str,
+    path: &std::path::Path,
     tooltip: String,
     play_cmd: Command,
     remove_cmd: Command,
     delete_cmd: Command,
 ) -> Vec<Command> {
     let mut cmds = Vec::new();
-    let actions_width = row_actions_width(ui);
     let row_height = ui.spacing().interact_size.y;
-    let row_rect = egui::Rect::from_min_size(
-        ui.cursor().min,
-        egui::vec2(ui.available_width(), row_height),
-    );
-    let row_response = ui.allocate_rect(row_rect, egui::Sense::hover());
-    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
-        ui.horizontal(|ui| {
-            let response =
-                playlist_item_button(ui, selected, title, actions_width).on_hover_text(tooltip);
-            if response.clicked() {
-                cmds.push(play_cmd);
-            }
-            if row_response.hovered() || row_response.contains_pointer() {
-                cmds.extend(row_actions(ui, remove_cmd, delete_cmd));
-            } else {
-                ui.add_space(actions_width);
-            }
-        });
-    });
-    cmds
-}
+    let row_height = row_height + ROW_EXTRA_HEIGHT;
+    let row_width = ui.available_width().max(0.0);
+    let (row_rect, row_response) =
+        ui.allocate_exact_size(egui::vec2(row_width, row_height), egui::Sense::click());
+    let row_response = row_response.on_hover_text(tooltip);
+    let show_actions = row_response.hovered() || row_response.contains_pointer();
 
-fn clear_all_toolbar(ui: &mut egui::Ui, cmd: Command, cmds: &mut Vec<Command>) {
-    ui.horizontal(|ui| {
-        let clear_width = ui.spacing().interact_size.x;
-        ui.add_space((ui.available_width() - clear_width).max(0.0));
-        if ui
-            .add(egui::Button::new("🗑"))
-            .on_hover_text(t!("clear_all").to_string())
-            .clicked()
-        {
-            cmds.push(cmd);
-        }
-    });
+    if let Some(fill) = row_fill(ui, &row_response, selected) {
+        ui.painter().rect_filled(row_rect, ROW_CORNER_RADIUS, fill);
+    }
+
+    let actions_width = if show_actions {
+        row_actions_width(ui) + ROW_TEXT_PADDING_X
+    } else {
+        0.0
+    };
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(row_rect.left() + ROW_TEXT_PADDING_X, row_rect.top()),
+        egui::pos2(
+            (row_rect.right() - ROW_TEXT_PADDING_X - actions_width).max(row_rect.left()),
+            row_rect.bottom(),
+        ),
+    );
+    let text_color = if selected {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().text_color()
+    };
+    paint_row_title(ui, text_rect, title, text_color);
+
+    if row_response.clicked() {
+        cmds.push(play_cmd);
+    }
+    if let Some(menu) = egui::Popup::context_menu(&row_response)
+        .style(crate::visuals::frosted_popup_style())
+        .show(|ui| {
+            let mut selected = Vec::new();
+            let path = path.to_path_buf();
+            if ui.button(t!("reveal_file").to_string()).clicked() {
+                selected.push(Command::RevealFile(path.clone()));
+                ui.close();
+            }
+            if ui.button(t!("open_sibling_videos").to_string()).clicked() {
+                selected.push(Command::OpenSiblingVideos(path.clone()));
+                ui.close();
+            }
+            if ui.button(t!("delete_file").to_string()).clicked() {
+                selected.push(delete_cmd);
+                ui.close();
+            }
+            selected
+        })
+    {
+        cmds.extend(menu.inner);
+    }
+    if show_actions {
+        cmds.extend(row_actions_at(ui, row_rect, remove_cmd));
+    }
+    cmds
 }
 
 /// 绘制左侧播放列表, 返回点击产生的命令。
@@ -167,25 +260,21 @@ pub fn playlist_panel(
     candidate: Option<usize>,
 ) -> Vec<Command> {
     let mut cmds = Vec::new();
-    if !paths.is_empty() {
-        clear_all_toolbar(ui, Command::ClearPlaylist, &mut cmds);
-    }
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-            for (i, p) in paths.iter().enumerate() {
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-                let selected = candidate.or(current) == Some(i);
-                cmds.extend(playlist_row(
-                    ui,
-                    selected,
-                    name,
-                    p.to_string_lossy().to_string(),
-                    Command::PlayIndex(i),
-                    Command::RemovePlaylistIndex(i),
-                    Command::DeletePlaylistFileIndex(i),
-                ));
-            }
-        });
+    sidebar_scroll_area(ui, |ui| {
+        for (i, p) in paths.iter().enumerate() {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+            let selected = candidate.or(current) == Some(i);
+            cmds.extend(playlist_row(
+                ui,
+                selected,
+                name,
+                p,
+                p.to_string_lossy().to_string(),
+                Command::PlayIndex(i),
+                Command::RemovePlaylistIndex(i),
+                Command::DeletePlaylistFileIndex(i),
+            ));
+        }
     });
     cmds
 }
@@ -197,24 +286,20 @@ pub fn history_panel(
     candidate: Option<usize>,
 ) -> Vec<Command> {
     let mut cmds = Vec::new();
-    if !paths.is_empty() {
-        clear_all_toolbar(ui, Command::ClearHistory, &mut cmds);
-    }
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-            for (i, p) in paths.iter().enumerate() {
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-                cmds.extend(playlist_row(
-                    ui,
-                    candidate == Some(i),
-                    name,
-                    p.to_string_lossy().to_string(),
-                    Command::Open(p.clone()),
-                    Command::RemoveHistoryIndex(i),
-                    Command::DeleteHistoryFileIndex(i),
-                ));
-            }
-        });
+    sidebar_scroll_area(ui, |ui| {
+        for (i, p) in paths.iter().enumerate() {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+            cmds.extend(playlist_row(
+                ui,
+                candidate == Some(i),
+                name,
+                p,
+                p.to_string_lossy().to_string(),
+                Command::Open(p.clone()),
+                Command::RemoveHistoryIndex(i),
+                Command::DeleteHistoryFileIndex(i),
+            ));
+        }
     });
     cmds
 }
@@ -222,29 +307,35 @@ pub fn history_panel(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn open_menu_commands_are_file_then_folder() {
-        assert_eq!(
-            super::open_menu_commands(),
-            vec![
-                player_core::Command::OpenDialog,
-                player_core::Command::OpenFolder
-            ]
-        );
-    }
-
-    #[test]
-    fn open_menu_uses_default_sized_icon_button() {
-        assert_eq!(super::OPEN_MENU_ICON, "➕");
+    fn open_file_entry_is_a_single_default_sized_button() {
+        assert_eq!(super::OPEN_FILE_ICON, "➕");
 
         let source = include_str!("playlist_panel.rs")
-            .split("fn playlist_item_button")
+            .split("fn remove_button_at")
             .next()
             .unwrap();
         assert!(!source.contains("menu_button(\"+\")"));
-        assert!(!source.contains("OPEN_MENU_BUTTON_SIZE"));
-        assert!(!source.contains("min_size"));
-        assert!(source.contains("MenuButton"));
-        assert!(source.contains("frosted_popup_style"));
+        assert!(!source.contains("OPEN_MENU"));
+        assert!(!source.contains("MenuButton"));
+        assert!(!source.contains("OpenFolder"));
+        assert!(source.contains("adaptive_icon_button"));
+        assert!(source.contains("Command::OpenDialog"));
+    }
+
+    #[test]
+    fn icon_buttons_use_content_width_and_stable_height() {
+        let source = include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("fn adaptive_icon_button"));
+        assert!(source.contains("min_size(icon_button_size(ui, icon))"));
+        assert!(source.contains("fn icon_button_size"));
+        assert!(source.contains("layout_no_wrap"));
+        assert!(source.contains("ui.spacing().button_padding.x * 2.0"));
+        assert!(source.contains("open_file_button_size"));
+        assert!(source.contains("clear_all_button_size"));
     }
 
     #[test]
@@ -253,19 +344,21 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        assert!(source.contains("truncate()"));
-        assert!(source.contains("available_width()"));
+        assert!(source.contains("egui::TextWrapMode::Truncate"));
+        assert!(source.contains("rect.width().max(0.0)"));
     }
 
     #[test]
-    fn playlist_items_use_left_aligned_full_width_buttons() {
+    fn playlist_items_use_fixed_rect_rows_instead_of_buttons() {
         let source = include_str!("playlist_panel.rs")
             .split("#[cfg(test)]")
             .next()
             .unwrap();
 
+        assert!(source.contains("allocate_exact_size(egui::vec2(row_width, row_height)"));
+        assert!(source.contains("paint_row_title"));
+        assert!(!source.contains("Button::selectable"));
         assert!(!source.contains("add_sized("));
-        assert!(source.contains("min_size(egui::vec2"));
     }
 
     #[test]
@@ -303,57 +396,111 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .unwrap();
+        let app_source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
 
         assert!(source.contains("Command::RemovePlaylistIndex(i)"));
-        assert!(source.contains("Command::ClearPlaylist"));
         assert!(source.contains("Command::RemoveHistoryIndex(i)"));
-        assert!(source.contains("Command::ClearHistory"));
+        assert!(app_source.contains("player_core::Command::ClearPlaylist"));
+        assert!(app_source.contains("player_core::Command::ClearHistory"));
         assert!(source.contains("t!(\"remove\")"));
         assert!(source.contains("t!(\"clear_all\")"));
     }
 
     #[test]
-    fn playlist_row_actions_are_trailing_hover_actions_with_more_menu() {
+    fn playlist_row_actions_only_show_remove_on_hover() {
         let source = include_str!("playlist_panel.rs")
             .split("#[cfg(test)]")
             .next()
             .unwrap();
 
         assert!(source.contains("row_response.hovered()"));
-        assert!(source.contains("ui.add_space(actions_width)"));
-        assert!(source.contains("MenuButton::from_button(egui::Button::new(\"⋯\"))"));
+        assert!(source.contains("row_actions_at"));
+        assert!(source.contains("centered_icon_button_at(ui, rect, REMOVE_ICON"));
+        assert!(source.contains("ui.visuals().error_fg_color"));
+        assert!(source.contains("row_actions_width(ui) + ROW_TEXT_PADDING_X"));
+        assert!(!source.contains("ui.add_space(actions_width)"));
+        assert!(!source.contains("MenuButton::from_button"));
+        assert!(!source.contains("MORE_ACTIONS_ICON"));
+        assert!(!source.contains("more_actions_button_at"));
+        assert!(!source.contains("t!(\"more_actions\")"));
+    }
+
+    #[test]
+    fn playlist_rows_use_rounded_fill_extra_height_and_tighter_padding() {
+        let source = include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("const ROW_TEXT_PADDING_X: f32 = 4.0"));
+        assert!(source.contains("const ROW_EXTRA_HEIGHT: f32 = 4.0"));
+        assert!(source.contains("const ROW_CORNER_RADIUS: u8 = 6"));
+        assert!(source.contains("let row_height = row_height + ROW_EXTRA_HEIGHT"));
+        assert!(source.contains("rect_filled(row_rect, ROW_CORNER_RADIUS, fill)"));
+        assert!(source.contains("row_rect.center().y - remove_size.y * 0.5"));
+    }
+
+    #[test]
+    fn playlist_rows_expose_file_actions_in_context_menu() {
+        let source = include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("egui::Popup::context_menu(&row_response)"));
+        assert!(source.contains("frosted_popup_style"));
+        assert!(source.contains("t!(\"reveal_file\")"));
+        assert!(source.contains("Command::RevealFile(path.clone())"));
+        assert!(source.contains("t!(\"open_sibling_videos\")"));
+        assert!(source.contains("Command::OpenSiblingVideos(path.clone())"));
         assert!(source.contains("Command::DeletePlaylistFileIndex(i)"));
         assert!(source.contains("Command::DeleteHistoryFileIndex(i)"));
-        assert!(source.contains("t!(\"more_actions\")"));
         assert!(source.contains("t!(\"delete_file\")"));
     }
 
     #[test]
-    fn clear_all_action_stays_in_compact_toolbar_before_scroll_area() {
+    fn clear_all_action_lives_in_header_and_disables_without_items() {
         let source = include_str!("playlist_panel.rs")
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        let before_scroll = source.split("egui::ScrollArea::vertical()").next().unwrap();
+        let app_source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
 
-        assert!(before_scroll.contains("clear_all_toolbar"));
-        assert!(!before_scroll.contains("Layout::right_to_left(egui::Align::Center)"));
-        assert!(source.contains("ui.add_space((ui.available_width() - clear_width).max(0.0))"));
+        assert!(!source.contains("clear_all_toolbar"));
+        assert!(!source.contains("Layout::right_to_left(egui::Align::Center)"));
+        assert!(source.contains("clear_all_button_at"));
+        assert!(source.contains("egui::UiBuilder::new().max_rect(rect).disabled()"));
+        assert!(app_source.contains("clear_all_button_at"));
+        assert!(app_source.contains("!playlist_paths.is_empty()"));
+        assert!(app_source.contains("!hist.is_empty()"));
     }
 
     #[test]
-    fn open_entry_is_single_menu_with_file_and_folder_options() {
+    fn open_entry_only_exposes_file_dialog() {
         let source = include_str!("playlist_panel.rs")
             .split("#[cfg(test)]")
             .next()
             .unwrap();
 
-        assert!(source.contains("OPEN_MENU_ICON"));
+        assert!(source.contains("OPEN_FILE_ICON"));
         assert!(source.contains("Command::OpenDialog"));
-        assert!(source.contains("Command::OpenFolder"));
         assert!(source.contains("shortcut_tooltip"));
         assert!(source.contains("t!(\"open_file\")"));
         assert!(source.contains("open_shortcut_label"));
-        assert!(source.contains("t!(\"open_folder\")"));
+        assert!(!source.contains("Command::OpenFolder"));
+        assert!(!source.contains("t!(\"open_folder\")"));
+    }
+
+    #[test]
+    fn sidebar_scroll_area_fills_fixed_panel_instead_of_content_height() {
+        let source = include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("fn sidebar_scroll_area"));
+        assert!(source.contains(".max_width(ui.available_width())"));
+        assert!(source.contains(".max_height(ui.available_height())"));
+        assert!(source.contains(".auto_shrink([false, false])"));
     }
 }

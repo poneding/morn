@@ -16,7 +16,8 @@ pub const VIDEO_MIN_WIDTH: f32 = 640.0;
 const CONTROL_BAR_INNER_PADDING_X: i8 = 14;
 const CONTROLS_IDLE_HIDE_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
 const OVERLAY_HOVER_RECHECK_GRACE: std::time::Duration = std::time::Duration::from_millis(150);
-const PLAYLIST_BOTTOM_CONTROLS_RESERVED_HEIGHT: f32 = 60.0;
+const PLAYLIST_SHEET_INNER_MARGIN_X: i8 = 10;
+const PLAYLIST_SHEET_INNER_MARGIN_Y: i8 = 6;
 const SCREENSHOT_NOTICE_TOP_OFFSET: f32 = 14.0;
 const SHORTCUT_NOTICE_TOP_OFFSET: f32 = 14.0;
 const SHORTCUT_NOTICE_DURATION: std::time::Duration = std::time::Duration::from_millis(1400);
@@ -36,6 +37,7 @@ pub struct PlayerApp {
     video_view: VideoView,
     show_settings: bool,
     show_playlist: bool,
+    playlist_auto_hidden: bool,
     sidebar_tab: SidebarTab,
     screenshot_notice: Option<ScreenshotNotice>,
     shortcut_notice: Option<ShortcutNotice>,
@@ -64,6 +66,7 @@ impl PlayerApp {
             video_view: VideoView::new(),
             show_settings: false,
             show_playlist: false,
+            playlist_auto_hidden: false,
             sidebar_tab: SidebarTab::Playlist,
             screenshot_notice: None,
             shortcut_notice: None,
@@ -171,6 +174,7 @@ impl PlayerApp {
                     false
                 }
             }
+            player_core::Command::RevealFile(path) => reveal_file(&path),
             _ => {
                 self.player.handle(cmd);
                 true
@@ -207,13 +211,62 @@ impl PlayerApp {
             player_core::Command::ClearHistory => {
                 self.history_candidate = None;
             }
+            player_core::Command::OpenSiblingVideos(_) => {
+                self.sidebar_tab = SidebarTab::Playlist;
+                self.history_candidate = None;
+                self.playlist_candidate = playlist_candidate_for_open(
+                    self.player.current_index(),
+                    self.player.playlist_paths().len(),
+                );
+            }
             _ => {}
         }
     }
 }
 
-fn prefs_path() -> std::path::PathBuf {
+pub(crate) fn prefs_path() -> std::path::PathBuf {
     std::env::temp_dir().join("morn-prefs.json")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileRevealCommand {
+    program: &'static str,
+    args: Vec<String>,
+}
+
+fn file_reveal_command(path: &std::path::Path) -> FileRevealCommand {
+    #[cfg(target_os = "windows")]
+    {
+        FileRevealCommand {
+            program: "explorer",
+            args: vec![format!("/select,{}", path.display())],
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        FileRevealCommand {
+            program: "open",
+            args: vec!["-R".to_string(), path.to_string_lossy().to_string()],
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let target = path.parent().unwrap_or(path);
+        FileRevealCommand {
+            program: "xdg-open",
+            args: vec![target.to_string_lossy().to_string()],
+        }
+    }
+}
+
+fn reveal_file(path: &std::path::Path) -> bool {
+    let command = file_reveal_command(path);
+    std::process::Command::new(command.program)
+        .args(command.args)
+        .spawn()
+        .is_ok()
 }
 
 fn theme_preference(s: &str) -> egui::ThemePreference {
@@ -230,17 +283,73 @@ fn playlist_sheet_width(available_width: f32) -> f32 {
         .min(available_width)
 }
 
+fn floating_controls_outer_height(style: &egui::Style) -> f32 {
+    let frame = crate::visuals::frosted_frame_for_style(
+        style,
+        egui::Margin::symmetric(
+            CONTROL_BAR_INNER_PADDING_X,
+            crate::visuals::FLOATING_CONTROL_BAR_INNER_MARGIN_Y,
+        ),
+    );
+    style.spacing.interact_size.y + frame.total_margin().sum().y
+}
+
+fn playlist_sheet_height(screen_rect: egui::Rect, style: &egui::Style) -> f32 {
+    let floating_margin = crate::visuals::FLOATING_PANEL_MARGIN;
+    let controls_height = floating_controls_outer_height(style);
+    (screen_rect.height() - floating_margin * 3.0 - controls_height).max(0.0)
+}
+
 fn bottom_controls_visible(
     has_media: bool,
     pointer_pos: Option<egui::Pos2>,
     screen_rect: egui::Rect,
     screenshot_notice_visible: bool,
+    active_overlay_hovered: bool,
     last_pointer_move: std::time::Instant,
     now: std::time::Instant,
 ) -> bool {
     !has_media
         || screenshot_notice_visible
+        || active_overlay_hovered
         || pointer_visible_for_overlay_recheck(pointer_pos, screen_rect, last_pointer_move, now)
+}
+
+#[derive(Clone, Copy)]
+struct PlaylistAutoHideInput {
+    playlist_visible: bool,
+    pointer_pos: Option<egui::Pos2>,
+    screen_rect: egui::Rect,
+    playlist_hovered: bool,
+    bottom_controls_hovered: bool,
+    last_pointer_move: std::time::Instant,
+    now: std::time::Instant,
+    opened_this_frame: bool,
+}
+
+fn playlist_should_auto_hide(input: PlaylistAutoHideInput) -> bool {
+    if !input.playlist_visible || input.opened_this_frame {
+        return false;
+    }
+    if !pointer_inside_window(input.pointer_pos, input.screen_rect) {
+        return true;
+    }
+    !input.playlist_hovered
+        && !input.bottom_controls_hovered
+        && input.now.duration_since(input.last_pointer_move) > CONTROLS_IDLE_HIDE_AFTER
+}
+
+fn playlist_should_restore_from_auto_hide(
+    show_playlist: bool,
+    playlist_auto_hidden: bool,
+    pointer_moved: bool,
+    pointer_pos: Option<egui::Pos2>,
+    screen_rect: egui::Rect,
+) -> bool {
+    show_playlist
+        && playlist_auto_hidden
+        && pointer_moved
+        && pointer_inside_window(pointer_pos, screen_rect)
 }
 
 fn pointer_active_inside_window(
@@ -548,6 +657,7 @@ impl eframe::App for PlayerApp {
         let p_key = ctx.input(|i| i.key_pressed(egui::Key::P));
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let mut keyboard_screenshot_requested = false;
+        let mut playlist_opened_this_frame = false;
 
         if escape {
             let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
@@ -558,6 +668,7 @@ impl eframe::App for PlayerApp {
                 }
                 EscapeShortcutAction::ClosePlaylist => {
                     self.show_playlist = false;
+                    self.playlist_auto_hidden = false;
                     self.playlist_candidate = None;
                     self.history_candidate = None;
                     self.set_shortcut_notice(format!("{}：{}", t!("playlist"), t!("closed")));
@@ -598,8 +709,11 @@ impl eframe::App for PlayerApp {
         ) {
             self.sidebar_tab = SidebarTab::Playlist;
             if self.show_playlist {
+                self.playlist_auto_hidden = false;
                 self.history_candidate = None;
+                playlist_opened_this_frame = true;
             } else {
+                self.playlist_auto_hidden = false;
                 self.playlist_candidate = None;
                 self.history_candidate = None;
             }
@@ -614,6 +728,7 @@ impl eframe::App for PlayerApp {
         // 键盘快捷键: Cmd/Ctrl+,=设置, Cmd/Ctrl+P=播放列表, F/Enter=全屏, 空格=播放/暂停,
         // M=静音, ↑↓=音量(吸附5), ←→=按步长 seek, macOS Cmd+方向键/Windows/Linux Alt+方向键控制列表与倍速。
         if !ctx.egui_wants_keyboard_input() {
+            let playlist_visible_for_shortcuts = self.show_playlist && !self.playlist_auto_hidden;
             let platform = crate::shortcuts::ShortcutPlatform::current();
             let step_ms = self.player.prefs().seek_step_secs * 1000;
             let pos = t.position_ms;
@@ -655,7 +770,7 @@ impl eframe::App for PlayerApp {
                 }
             }
 
-            if !shortcut_handled && self.show_playlist {
+            if !shortcut_handled && playlist_visible_for_shortcuts {
                 match self.sidebar_tab {
                     SidebarTab::Playlist => {
                         if up {
@@ -676,6 +791,7 @@ impl eframe::App for PlayerApp {
                             if let Some(candidate) = self.playlist_candidate {
                                 self.handle_command(player_core::Command::PlayIndex(candidate));
                                 self.show_playlist = false;
+                                self.playlist_auto_hidden = false;
                                 self.playlist_candidate = None;
                                 self.history_candidate = None;
                                 if let Some(name) = self.current_playlist_name() {
@@ -753,6 +869,7 @@ impl eframe::App for PlayerApp {
                                         std::path::PathBuf::from(path),
                                     ));
                                     self.show_playlist = false;
+                                    self.playlist_auto_hidden = false;
                                     self.playlist_candidate = None;
                                     self.history_candidate = None;
                                     if let Some(name) = self.current_playlist_name() {
@@ -882,15 +999,30 @@ impl eframe::App for PlayerApp {
         let screen_rect = ctx.content_rect();
         let pointer_pos = ctx.input(|i| i.pointer.hover_pos());
         let now = std::time::Instant::now();
-        if pointer_moved_since_last_frame(self.last_pointer_pos, pointer_pos) {
+        let pointer_moved = pointer_moved_since_last_frame(self.last_pointer_pos, pointer_pos);
+        if pointer_moved {
             self.last_pointer_move = now;
+        }
+        if playlist_opened_this_frame {
+            self.last_pointer_move = now;
+        }
+        if playlist_should_restore_from_auto_hide(
+            self.show_playlist,
+            self.playlist_auto_hidden,
+            pointer_moved,
+            pointer_pos,
+            screen_rect,
+        ) {
+            self.playlist_auto_hidden = false;
         }
         self.last_pointer_pos = pointer_pos;
         let playlist_paths = self.player.playlist_paths();
         let current_index = self.player.current_index();
         let has_prev = playlist_has_prev(playlist_paths.len(), current_index);
         let has_next = playlist_has_next(playlist_paths.len(), current_index);
-        if self.show_playlist {
+        let playlist_visible = self.show_playlist && !self.playlist_auto_hidden;
+        let mut playlist_hovered = false;
+        if playlist_visible {
             let hist: Vec<std::path::PathBuf> =
                 self.player.history().iter().map(Into::into).collect();
             match self.sidebar_tab {
@@ -905,93 +1037,180 @@ impl eframe::App for PlayerApp {
                         playlist_candidate_for_open(self.history_candidate, hist.len());
                 }
             }
+            let style = ctx.global_style();
             let sheet_width = playlist_sheet_width(screen_rect.width());
-            let playlist_sheet_pos = egui::pos2(
-                screen_rect.max.x - sheet_width - crate::visuals::FLOATING_PANEL_MARGIN,
-                screen_rect.min.y + crate::visuals::FLOATING_PANEL_MARGIN,
-            );
-            let playlist_sheet_height = (screen_rect.max.y
-                - playlist_sheet_pos.y
-                - PLAYLIST_BOTTOM_CONTROLS_RESERVED_HEIGHT)
-                .max(0.0);
+            let playlist_sheet_height = playlist_sheet_height(screen_rect, style.as_ref());
             let mut playlist_commands = Vec::new();
 
-            let playlist_area = egui::Area::new(egui::Id::new("playlist_sheet"))
-                .fixed_pos(playlist_sheet_pos)
+            let playlist_area = egui::Area::new(egui::Id::new("playlist_sheet_fixed_v2"))
+                .anchor(
+                    egui::Align2::RIGHT_TOP,
+                    egui::vec2(
+                        -crate::visuals::FLOATING_PANEL_MARGIN,
+                        crate::visuals::FLOATING_PANEL_MARGIN,
+                    ),
+                )
+                .default_size(egui::vec2(sheet_width, playlist_sheet_height))
                 .order(egui::Order::Foreground)
                 .fade_in(false)
                 .show(&ctx, |ui| {
                     ui.set_width(sheet_width);
                     ui.set_height(playlist_sheet_height);
-                    let frame = crate::visuals::frosted_frame(ui, egui::Margin::symmetric(10, 6))
-                        .show(ui, |ui| {
-                            ui.set_min_height(playlist_sheet_height);
-                            ui.horizontal(|ui| {
-                                playlist_commands
-                                    .extend(crate::playlist_panel::open_menu_button(ui));
-                                let tab_before = self.sidebar_tab;
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.selectable_value(
-                                            &mut self.sidebar_tab,
-                                            SidebarTab::History,
-                                            t!("history").to_string(),
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.sidebar_tab,
-                                            SidebarTab::Playlist,
-                                            t!("playlist").to_string(),
-                                        );
-                                    },
-                                );
-                                if self.sidebar_tab != tab_before {
-                                    match self.sidebar_tab {
-                                        SidebarTab::Playlist => {
-                                            self.playlist_candidate = playlist_candidate_for_open(
-                                                self.playlist_candidate.or(current_index),
-                                                playlist_paths.len(),
-                                            );
-                                            self.history_candidate = None;
-                                        }
-                                        SidebarTab::History => {
-                                            self.history_candidate = playlist_candidate_for_open(
-                                                self.history_candidate,
-                                                hist.len(),
-                                            );
-                                            self.playlist_candidate = None;
-                                        }
-                                    }
-                                }
-                            });
-                            ui.separator();
+                    let playlist_frame = crate::visuals::frosted_frame(
+                        ui,
+                        egui::Margin::symmetric(
+                            PLAYLIST_SHEET_INNER_MARGIN_X,
+                            PLAYLIST_SHEET_INNER_MARGIN_Y,
+                        ),
+                    );
+                    let frame_margin = playlist_frame.total_margin().sum();
+                    let content_width = (sheet_width - frame_margin.x).max(0.0);
+                    let content_height = (playlist_sheet_height - frame_margin.y).max(0.0);
+                    let frame = playlist_frame.show(ui, |ui| {
+                        ui.set_width(content_width);
+                        ui.set_height(content_height);
+                        let header_height = ui.spacing().interact_size.y;
+                        let header_width = ui.available_width().max(0.0);
+                        let (header_rect, _) = ui.allocate_exact_size(
+                            egui::vec2(header_width, header_height),
+                            egui::Sense::hover(),
+                        );
+                        let open_size = crate::playlist_panel::open_file_button_size(ui);
+                        let clear_size = crate::playlist_panel::clear_all_button_size(ui);
+                        let open_rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                header_rect.left(),
+                                header_rect.center().y - open_size.y * 0.5,
+                            ),
+                            open_size,
+                        );
+                        let clear_rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                header_rect.right() - clear_size.x,
+                                header_rect.center().y - clear_size.y * 0.5,
+                            ),
+                            clear_size,
+                        );
+                        playlist_commands
+                            .extend(crate::playlist_panel::open_file_button_at(ui, open_rect));
+
+                        let tab_before = self.sidebar_tab;
+                        let tab_gap = ui.spacing().item_spacing.x;
+                        let tab_padding = ui.spacing().button_padding.x * 2.0;
+                        let history_label = t!("history").to_string();
+                        let playlist_label = t!("playlist").to_string();
+                        let history_width = ui
+                            .painter()
+                            .layout_no_wrap(
+                                history_label.clone(),
+                                egui::TextStyle::Button.resolve(ui.style()),
+                                ui.visuals().text_color(),
+                            )
+                            .size()
+                            .x
+                            + tab_padding;
+                        let playlist_width = ui
+                            .painter()
+                            .layout_no_wrap(
+                                playlist_label.clone(),
+                                egui::TextStyle::Button.resolve(ui.style()),
+                                ui.visuals().text_color(),
+                            )
+                            .size()
+                            .x
+                            + tab_padding;
+                        let tab_height = ui.spacing().interact_size.y;
+                        let tab_y = header_rect.center().y - tab_height * 0.5;
+                        let tabs_width = playlist_width + tab_gap + history_width;
+                        let tabs_left = header_rect.center().x - tabs_width * 0.5;
+                        let history_rect = egui::Rect::from_min_size(
+                            egui::pos2(tabs_left + playlist_width + tab_gap, tab_y),
+                            egui::vec2(history_width, tab_height),
+                        );
+                        let playlist_rect = egui::Rect::from_min_size(
+                            egui::pos2(tabs_left, tab_y),
+                            egui::vec2(playlist_width, tab_height),
+                        );
+
+                        if ui
+                            .put(
+                                playlist_rect,
+                                egui::Button::selectable(
+                                    self.sidebar_tab == SidebarTab::Playlist,
+                                    playlist_label,
+                                ),
+                            )
+                            .clicked()
+                        {
+                            self.sidebar_tab = SidebarTab::Playlist;
+                        }
+                        if ui
+                            .put(
+                                history_rect,
+                                egui::Button::selectable(
+                                    self.sidebar_tab == SidebarTab::History,
+                                    history_label,
+                                ),
+                            )
+                            .clicked()
+                        {
+                            self.sidebar_tab = SidebarTab::History;
+                        }
+                        if self.sidebar_tab != tab_before {
                             match self.sidebar_tab {
                                 SidebarTab::Playlist => {
-                                    playlist_commands.extend(
-                                        crate::playlist_panel::playlist_panel(
-                                            ui,
-                                            &playlist_paths,
-                                            current_index,
-                                            self.playlist_candidate,
-                                        ),
+                                    self.playlist_candidate = playlist_candidate_for_open(
+                                        self.playlist_candidate.or(current_index),
+                                        playlist_paths.len(),
                                     );
+                                    self.history_candidate = None;
                                 }
                                 SidebarTab::History => {
-                                    playlist_commands.extend(crate::playlist_panel::history_panel(
-                                        ui,
-                                        &hist,
+                                    self.history_candidate = playlist_candidate_for_open(
                                         self.history_candidate,
-                                    ));
+                                        hist.len(),
+                                    );
+                                    self.playlist_candidate = None;
                                 }
                             }
-                        });
+                        }
+                        let (clear_cmd, clear_enabled) = match self.sidebar_tab {
+                            SidebarTab::Playlist => (
+                                player_core::Command::ClearPlaylist,
+                                !playlist_paths.is_empty(),
+                            ),
+                            SidebarTab::History => {
+                                (player_core::Command::ClearHistory, !hist.is_empty())
+                            }
+                        };
+                        playlist_commands.extend(crate::playlist_panel::clear_all_button_at(
+                            ui,
+                            clear_rect,
+                            clear_cmd,
+                            clear_enabled,
+                        ));
+                        ui.separator();
+                        match self.sidebar_tab {
+                            SidebarTab::Playlist => {
+                                playlist_commands.extend(crate::playlist_panel::playlist_panel(
+                                    ui,
+                                    &playlist_paths,
+                                    current_index,
+                                    self.playlist_candidate,
+                                ));
+                            }
+                            SidebarTab::History => {
+                                playlist_commands.extend(crate::playlist_panel::history_panel(
+                                    ui,
+                                    &hist,
+                                    self.history_candidate,
+                                ));
+                            }
+                        }
+                    });
                     frame.response.hovered() || frame.response.contains_pointer()
                 });
-            refresh_pointer_activity_for_current_overlay_hover(
-                playlist_area.inner || playlist_area.response.hovered(),
-                &mut self.last_pointer_move,
-                now,
-            );
+            playlist_hovered = playlist_area.inner || playlist_area.response.hovered();
 
             for cmd in playlist_commands {
                 let playlist_len_before = self.player.playlist_paths().len();
@@ -1011,6 +1230,7 @@ impl eframe::App for PlayerApp {
             pointer_pos,
             screen_rect,
             self.screenshot_notice.is_some(),
+            playlist_hovered,
             self.last_pointer_move,
             now,
         );
@@ -1018,6 +1238,7 @@ impl eframe::App for PlayerApp {
         let mut bottom_commands = Vec::new();
         let mut screenshot_requested = keyboard_screenshot_requested;
         let tracks = self.player.subtitle_tracks().to_vec();
+        let mut bottom_controls_hovered = false;
         if controls_visible {
             let outer_width =
                 (screen_rect.width() - crate::visuals::FLOATING_PANEL_MARGIN * 2.0).max(0.0);
@@ -1079,7 +1300,9 @@ impl eframe::App for PlayerApp {
                                         .clicked()
                                     {
                                         self.show_playlist = !self.show_playlist;
+                                        self.playlist_auto_hidden = false;
                                         if self.show_playlist {
+                                            playlist_opened_this_frame = true;
                                             self.sidebar_tab = SidebarTab::Playlist;
                                             self.playlist_candidate = playlist_candidate_for_open(
                                                 current_index,
@@ -1097,14 +1320,31 @@ impl eframe::App for PlayerApp {
                     });
                     frame.response.hovered() || frame.response.contains_pointer()
                 });
+            bottom_controls_hovered =
+                floating_controls_area.inner || floating_controls_area.response.hovered();
             refresh_pointer_activity_for_current_overlay_hover(
-                floating_controls_area.inner || floating_controls_area.response.hovered(),
+                bottom_controls_hovered,
                 &mut self.last_pointer_move,
                 now,
             );
         }
         for cmd in bottom_commands {
             self.handle_command(cmd);
+        }
+        if playlist_opened_this_frame {
+            self.last_pointer_move = now;
+        }
+        if playlist_should_auto_hide(PlaylistAutoHideInput {
+            playlist_visible,
+            pointer_pos,
+            screen_rect,
+            playlist_hovered,
+            bottom_controls_hovered,
+            last_pointer_move: self.last_pointer_move,
+            now,
+            opened_this_frame: playlist_opened_this_frame,
+        }) {
+            self.playlist_auto_hidden = true;
         }
         if screenshot_requested {
             if let Some((rgba, w, h)) = self.video_view.last_frame() {
@@ -1174,6 +1414,47 @@ impl eframe::App for PlayerApp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reveal_file_command_uses_platform_file_manager() {
+        #[cfg(target_os = "windows")]
+        {
+            let path = std::path::PathBuf::from(r"C:\Videos\clip one.mp4");
+            let command = super::file_reveal_command(&path);
+            assert_eq!(command.program, "explorer");
+            assert_eq!(command.args, vec![format!("/select,{}", path.display())]);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let path = std::path::PathBuf::from("/Users/me/Videos/clip one.mp4");
+            let command = super::file_reveal_command(&path);
+            assert_eq!(command.program, "open");
+            assert_eq!(
+                command.args,
+                vec!["-R".to_string(), path.to_string_lossy().to_string()]
+            );
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            let path = std::path::PathBuf::from("/tmp/videos/clip one.mp4");
+            let command = super::file_reveal_command(&path);
+            assert_eq!(command.program, "xdg-open");
+            assert_eq!(command.args, vec!["/tmp/videos".to_string()]);
+        }
+    }
+
+    #[test]
+    fn app_handles_playlist_context_file_commands() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+
+        assert!(source.contains("player_core::Command::RevealFile(path) => reveal_file(&path)"));
+        assert!(source.contains("player_core::Command::OpenSiblingVideos(_)"));
+        assert!(source.contains("self.sidebar_tab = SidebarTab::Playlist"));
+        assert!(source.contains("self.history_candidate = None"));
+        assert!(source.contains("self.playlist_candidate = playlist_candidate_for_open"));
+    }
+
     #[test]
     fn app_width_budget_preserves_sidebar_and_video_minimums() {
         let app_min_width = std::hint::black_box(super::APP_MIN_WIDTH);
@@ -1290,6 +1571,7 @@ mod tests {
             None,
             screen,
             false,
+            false,
             expired_move,
             now
         ));
@@ -1298,6 +1580,7 @@ mod tests {
             None,
             screen,
             true,
+            false,
             expired_move,
             now
         ));
@@ -1306,13 +1589,6 @@ mod tests {
             Some(egui::pos2(640.0, 700.0)),
             screen,
             false,
-            recent_move,
-            now
-        ));
-        assert!(super::bottom_controls_visible(
-            true,
-            Some(egui::pos2(640.0, 500.0)),
-            screen,
             false,
             recent_move,
             now
@@ -1321,14 +1597,34 @@ mod tests {
             true,
             Some(egui::pos2(640.0, 500.0)),
             screen,
+            false,
+            false,
+            recent_move,
+            now
+        ));
+        assert!(super::bottom_controls_visible(
+            true,
+            Some(egui::pos2(640.0, 500.0)),
+            screen,
+            false,
             false,
             recheck_move,
+            now
+        ));
+        assert!(super::bottom_controls_visible(
+            true,
+            Some(egui::pos2(1000.0, 240.0)),
+            screen,
+            false,
+            true,
+            expired_move,
             now
         ));
         assert!(!super::bottom_controls_visible(
             true,
             Some(egui::pos2(640.0, 500.0)),
             screen,
+            false,
             false,
             expired_move,
             now
@@ -1337,6 +1633,7 @@ mod tests {
             true,
             Some(egui::pos2(640.0, 721.0)),
             screen,
+            false,
             false,
             recent_move,
             now
@@ -1399,6 +1696,7 @@ mod tests {
             true,
             Some(egui::pos2(640.0, 680.0)),
             screen,
+            false,
             false,
             last_pointer_move,
             now
@@ -1469,6 +1767,129 @@ mod tests {
     }
 
     #[test]
+    fn playlist_auto_hides_when_idle_outside_active_overlays() {
+        let screen = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1280.0, 720.0));
+        let now = std::time::Instant::now();
+        let idle_move = now - super::CONTROLS_IDLE_HIDE_AFTER - std::time::Duration::from_millis(1);
+        let recent_move = now - std::time::Duration::from_secs(1);
+        let input = |pointer_pos,
+                     playlist_hovered,
+                     bottom_controls_hovered,
+                     last_pointer_move,
+                     opened_this_frame| {
+            super::PlaylistAutoHideInput {
+                playlist_visible: true,
+                pointer_pos,
+                screen_rect: screen,
+                playlist_hovered,
+                bottom_controls_hovered,
+                last_pointer_move,
+                now,
+                opened_this_frame,
+            }
+        };
+
+        assert!(super::playlist_should_auto_hide(input(
+            Some(egui::pos2(640.0, 360.0)),
+            false,
+            false,
+            idle_move,
+            false
+        )));
+        assert!(super::playlist_should_auto_hide(input(
+            None,
+            false,
+            false,
+            recent_move,
+            false
+        )));
+        assert!(!super::playlist_should_auto_hide(input(
+            Some(egui::pos2(640.0, 360.0)),
+            true,
+            false,
+            idle_move,
+            false
+        )));
+        assert!(!super::playlist_should_auto_hide(input(
+            Some(egui::pos2(640.0, 680.0)),
+            false,
+            true,
+            idle_move,
+            false
+        )));
+        assert!(!super::playlist_should_auto_hide(input(
+            Some(egui::pos2(640.0, 360.0)),
+            false,
+            false,
+            idle_move,
+            true
+        )));
+        assert!(!super::playlist_should_auto_hide(
+            super::PlaylistAutoHideInput {
+                playlist_visible: false,
+                pointer_pos: Some(egui::pos2(640.0, 360.0)),
+                screen_rect: screen,
+                playlist_hovered: false,
+                bottom_controls_hovered: false,
+                last_pointer_move: idle_move,
+                now,
+                opened_this_frame: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn playlist_auto_hide_restores_on_pointer_motion_inside_window() {
+        let screen = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1280.0, 720.0));
+
+        assert!(super::playlist_should_restore_from_auto_hide(
+            true,
+            true,
+            true,
+            Some(egui::pos2(640.0, 360.0)),
+            screen
+        ));
+        assert!(super::playlist_should_restore_from_auto_hide(
+            true,
+            true,
+            true,
+            Some(egui::pos2(4.0, 4.0)),
+            screen
+        ));
+        assert!(!super::playlist_should_restore_from_auto_hide(
+            false,
+            true,
+            true,
+            Some(egui::pos2(640.0, 360.0)),
+            screen
+        ));
+        assert!(!super::playlist_should_restore_from_auto_hide(
+            true,
+            false,
+            true,
+            Some(egui::pos2(640.0, 360.0)),
+            screen
+        ));
+        assert!(!super::playlist_should_restore_from_auto_hide(
+            true,
+            true,
+            false,
+            Some(egui::pos2(640.0, 360.0)),
+            screen
+        ));
+        assert!(!super::playlist_should_restore_from_auto_hide(
+            true, true, true, None, screen
+        ));
+        assert!(!super::playlist_should_restore_from_auto_hide(
+            true,
+            true,
+            true,
+            Some(egui::pos2(640.0, 721.0)),
+            screen
+        ));
+    }
+
+    #[test]
     fn pointer_movement_tracks_real_motion() {
         assert!(super::pointer_moved_since_last_frame(
             None,
@@ -1493,9 +1914,12 @@ mod tests {
         let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
 
         assert!(source.contains("show_playlist"));
-        assert!(source.contains("Area::new(egui::Id::new(\"playlist_sheet\"))"));
-        assert!(source.contains(".fixed_pos(playlist_sheet_pos"));
+        assert!(source.contains("Area::new(egui::Id::new(\"playlist_sheet_fixed_v2\"))"));
+        assert!(source.contains(".anchor("));
+        assert!(source.contains("egui::Align2::RIGHT_TOP"));
+        assert!(source.contains(".default_size(egui::vec2(sheet_width, playlist_sheet_height))"));
         assert!(source.contains("egui::Order::Foreground"));
+        assert!(!source.contains("playlist_sheet_pos"));
         assert!(!source.contains("Panel::right(\"playlist\")"));
         assert!(!source.contains("Panel::left(\"playlist\")"));
         assert!(source.contains("self.show_playlist = !self.show_playlist"));
@@ -1513,17 +1937,38 @@ mod tests {
     fn playlist_sheet_floats_as_rounded_card_above_controls() {
         let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
         let playlist_source = source
-            .split("egui::Area::new(egui::Id::new(\"playlist_sheet\"))")
+            .split("egui::Area::new(egui::Id::new(\"playlist_sheet_fixed_v2\"))")
             .nth(1)
             .unwrap()
-            .split("let pointer_pos")
+            .split("let has_media")
             .next()
             .unwrap();
 
-        assert!(source.contains("screen_rect.min.y + crate::visuals::FLOATING_PANEL_MARGIN"));
-        assert!(source
-            .contains("screen_rect.max.x - sheet_width - crate::visuals::FLOATING_PANEL_MARGIN"));
+        assert!(playlist_source.contains(".anchor("));
+        assert!(playlist_source.contains("egui::Align2::RIGHT_TOP"));
+        assert!(playlist_source.contains("-crate::visuals::FLOATING_PANEL_MARGIN"));
+        assert!(source.contains("floating_margin * 3.0"));
+        assert!(source.contains("floating_controls_outer_height(style)"));
         assert!(playlist_source.contains("crate::visuals::frosted_frame"));
+    }
+
+    #[test]
+    fn playlist_sheet_content_size_deducts_frame_margin() {
+        let source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+        let playlist_source = source
+            .split("egui::Area::new(egui::Id::new(\"playlist_sheet_fixed_v2\"))")
+            .nth(1)
+            .unwrap()
+            .split("for cmd in playlist_commands")
+            .next()
+            .unwrap();
+
+        assert!(playlist_source.contains("playlist_frame.total_margin().sum()"));
+        assert!(playlist_source.contains("sheet_width - frame_margin.x"));
+        assert!(playlist_source.contains("playlist_sheet_height - frame_margin.y"));
+        assert!(playlist_source.contains("ui.set_width(content_width)"));
+        assert!(playlist_source.contains("ui.set_height(content_height)"));
+        assert!(!playlist_source.contains("ui.set_min_height(playlist_sheet_height)"));
     }
 
     #[test]

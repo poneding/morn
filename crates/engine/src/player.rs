@@ -181,6 +181,18 @@ impl Player {
         }
     }
 
+    fn open_sibling_videos(&mut self, path: &Path) {
+        let Some(dir) = path.parent() else {
+            return;
+        };
+        let items = dir_videos(dir);
+        let index = items.iter().position(|item| item == path).unwrap_or(0);
+        if let Some(selected) = items.get(index).cloned() {
+            self.playlist.set_items(items, index);
+            self.open(&selected);
+        }
+    }
+
     pub fn history(&self) -> &[String] {
         &self.prefs.history
     }
@@ -414,6 +426,10 @@ impl Player {
             }
             Command::ClearHistory => {
                 player_core::clear_history(&mut self.prefs.history);
+            }
+            Command::RevealFile(_) => {}
+            Command::OpenSiblingVideos(path) => {
+                self.open_sibling_videos(&path);
             }
             Command::DeletePlaylistFileIndex(i) => {
                 self.delete_playlist_file_index(i);
@@ -758,6 +774,35 @@ mod tests {
 
         assert_eq!(p.playlist_paths(), vec![b, a]);
         assert_eq!(p.current_index(), Some(0));
+        p.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn open_sibling_videos_loads_directory_and_selects_requested_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_open_siblings_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.mp4");
+        let b = dir.join("b.mp4");
+        let c = dir.join("c.mp4");
+        let note = dir.join("note.txt");
+        std::fs::write(&a, b"dummy").unwrap();
+        std::fs::write(&b, b"dummy").unwrap();
+        std::fs::write(&c, b"dummy").unwrap();
+        std::fs::write(note, b"not a video").unwrap();
+
+        let mut p = Player::new();
+        p.handle(Command::OpenSiblingVideos(b.clone()));
+
+        assert_eq!(p.playlist_paths(), vec![a, b, c]);
+        assert_eq!(p.current_index(), Some(1));
         p.handle(Command::Stop);
         std::fs::remove_dir_all(dir).ok();
     }

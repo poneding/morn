@@ -40,7 +40,7 @@ fn empty_state_contents(ui: &mut egui::Ui, commands: &mut Vec<Command>) {
     ui.vertical_centered(|ui| {
         ui.label(t!("drop_hint").to_string());
         ui.add_space(8.0);
-        commands.extend(crate::playlist_panel::open_menu_button(ui));
+        commands.extend(crate::playlist_panel::open_file_button(ui));
     });
 }
 
@@ -339,7 +339,7 @@ mod tests {
             .next()
             .unwrap();
 
-        assert!(source.contains("crate::playlist_panel::open_menu_button(ui)"));
+        assert!(source.contains("crate::playlist_panel::open_file_button(ui)"));
         assert!(!source.contains("Command::OpenDialog"));
         assert!(!source.contains("Command::OpenFolder"));
     }

@@ -59,10 +59,14 @@ clear_all:
   en: Clear All
   zh-CN: 全部清除
   zh-TW: 全部清除
-more_actions:
-  en: More Actions
-  zh-CN: 更多操作
-  zh-TW: 更多操作
+reveal_file:
+  en: Show in Explorer
+  zh-CN: 在资源管理器中显示
+  zh-TW: 在檔案管理器中顯示
+open_sibling_videos:
+  en: Load Folder Videos
+  zh-CN: 加载同目录视频
+  zh-TW: 載入同目錄影片
 delete_file:
   en: Delete File
   zh-CN: 删除文件
