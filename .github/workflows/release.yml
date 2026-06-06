@@ -294,16 +294,18 @@ jobs:
             echo "::error::No release assets were downloaded"
             exit 1
           fi
+          if [[ ! -s CHANGELOG.md ]]; then
+            printf '### Miscellaneous\n- Release %s\n' "${RELEASE_TAG}" > CHANGELOG.md
+          fi
 
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release upload "${RELEASE_TAG}" "${assets[@]}" CHANGELOG.md --clobber
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
             gh release edit "${RELEASE_TAG}" \
               --title "${RELEASE_TAG}" \
               --notes-file CHANGELOG.md
           else
             gh release create "${RELEASE_TAG}" \
               "${assets[@]}" \
-              CHANGELOG.md \
               --title "${RELEASE_TAG}" \
               --notes-file CHANGELOG.md \
               --verify-tag
