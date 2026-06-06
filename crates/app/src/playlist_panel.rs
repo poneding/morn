@@ -244,18 +244,30 @@ fn sidebar_scroll_area<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui
         .inner
 }
 
-fn playlist_row(
-    ui: &mut egui::Ui,
+struct PlaylistRow<'a> {
     current: bool,
     candidate: bool,
-    title: &str,
-    path: &std::path::Path,
+    title: &'a str,
+    path: &'a std::path::Path,
     tooltip: String,
     remove_id: egui::Id,
     play_cmd: Command,
     remove_cmd: Command,
     delete_cmd: Command,
-) -> Vec<Command> {
+}
+
+fn playlist_row(ui: &mut egui::Ui, row: PlaylistRow<'_>) -> Vec<Command> {
+    let PlaylistRow {
+        current,
+        candidate,
+        title,
+        path,
+        tooltip,
+        remove_id,
+        play_cmd,
+        remove_cmd,
+        delete_cmd,
+    } = row;
     let mut cmds = Vec::new();
     let row_height = ui.spacing().interact_size.y;
     let row_height = row_height + ROW_EXTRA_HEIGHT;
@@ -331,15 +343,17 @@ pub fn playlist_panel(
             let is_candidate = candidate == Some(i);
             cmds.extend(playlist_row(
                 ui,
-                is_current,
-                is_candidate,
-                name,
-                p,
-                p.to_string_lossy().to_string(),
-                ui.make_persistent_id(("playlist_remove", i)),
-                Command::PlayIndex(i),
-                Command::RemovePlaylistIndex(i),
-                Command::DeletePlaylistFileIndex(i),
+                PlaylistRow {
+                    current: is_current,
+                    candidate: is_candidate,
+                    title: name,
+                    path: p,
+                    tooltip: p.to_string_lossy().to_string(),
+                    remove_id: ui.make_persistent_id(("playlist_remove", i)),
+                    play_cmd: Command::PlayIndex(i),
+                    remove_cmd: Command::RemovePlaylistIndex(i),
+                    delete_cmd: Command::DeletePlaylistFileIndex(i),
+                },
             ));
         }
     });
@@ -358,15 +372,17 @@ pub fn history_panel(
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
             cmds.extend(playlist_row(
                 ui,
-                false,
-                candidate == Some(i),
-                name,
-                p,
-                p.to_string_lossy().to_string(),
-                ui.make_persistent_id(("history_remove", i)),
-                Command::Open(p.clone()),
-                Command::RemoveHistoryIndex(i),
-                Command::DeleteHistoryFileIndex(i),
+                PlaylistRow {
+                    current: false,
+                    candidate: candidate == Some(i),
+                    title: name,
+                    path: p,
+                    tooltip: p.to_string_lossy().to_string(),
+                    remove_id: ui.make_persistent_id(("history_remove", i)),
+                    play_cmd: Command::Open(p.clone()),
+                    remove_cmd: Command::RemoveHistoryIndex(i),
+                    delete_cmd: Command::DeleteHistoryFileIndex(i),
+                },
             ));
         }
     });

@@ -270,7 +270,95 @@ impl PlayerApp {
 }
 
 pub(crate) fn prefs_path() -> std::path::PathBuf {
+    let preferred = prefs_path_from_env(&PrefsPathEnv::current());
+    let _ = migrate_legacy_prefs(&legacy_temp_prefs_path(), &preferred);
+    preferred
+}
+
+#[derive(Debug, Clone)]
+struct PrefsPathEnv {
+    home: Option<std::path::PathBuf>,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    appdata: Option<std::path::PathBuf>,
+    #[cfg_attr(any(target_os = "windows", target_os = "macos"), allow(dead_code))]
+    xdg_config_home: Option<std::path::PathBuf>,
+}
+
+impl PrefsPathEnv {
+    fn current() -> Self {
+        Self {
+            home: std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(Into::into)
+                .or_else(|| {
+                    std::env::var_os("USERPROFILE")
+                        .filter(|value| !value.is_empty())
+                        .map(Into::into)
+                }),
+            appdata: std::env::var_os("APPDATA")
+                .filter(|value| !value.is_empty())
+                .map(Into::into),
+            xdg_config_home: std::env::var_os("XDG_CONFIG_HOME")
+                .filter(|value| !value.is_empty())
+                .map(Into::into),
+        }
+    }
+}
+
+fn prefs_path_from_env(env: &PrefsPathEnv) -> std::path::PathBuf {
+    config_dir_from_env(env).join("prefs.json")
+}
+
+fn config_dir_from_env(env: &PrefsPathEnv) -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        env.appdata
+            .clone()
+            .or_else(|| {
+                env.home
+                    .as_ref()
+                    .map(|home| home.join("AppData").join("Roaming"))
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("Morn")
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        env.home
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("Library")
+            .join("Application Support")
+            .join("Morn")
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        env.xdg_config_home
+            .clone()
+            .or_else(|| env.home.as_ref().map(|home| home.join(".config")))
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("morn")
+    }
+}
+
+fn legacy_temp_prefs_path() -> std::path::PathBuf {
     std::env::temp_dir().join("morn-prefs.json")
+}
+
+fn migrate_legacy_prefs(
+    legacy: &std::path::Path,
+    preferred: &std::path::Path,
+) -> std::io::Result<()> {
+    if preferred.exists() || !legacy.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = preferred.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(legacy, preferred)?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,6 +502,7 @@ fn playlist_should_restore_from_auto_hide(
         && pointer_inside_window(pointer_pos, screen_rect)
 }
 
+#[allow(dead_code)]
 fn pointer_active_inside_window(
     pointer_pos: Option<egui::Pos2>,
     screen_rect: egui::Rect,
@@ -1117,20 +1206,21 @@ impl eframe::App for PlayerApp {
             self.playlist_auto_hidden = false;
         }
         self.last_pointer_pos = pointer_pos;
-        let playlist_paths = self.player.playlist_paths();
         let current_index = self.player.current_index();
-        let has_prev = playlist_has_prev(playlist_paths.len(), current_index);
-        let has_next = playlist_has_next(playlist_paths.len(), current_index);
+        let playlist_len = self.player.playlist_paths().len();
+        let has_prev = playlist_has_prev(playlist_len, current_index);
+        let has_next = playlist_has_next(playlist_len, current_index);
         let playlist_visible = self.show_playlist && !self.playlist_auto_hidden;
         let mut playlist_hovered = false;
         if playlist_visible {
             let hist: Vec<std::path::PathBuf> =
                 self.player.history().iter().map(Into::into).collect();
+            let playlist_paths = self.player.playlist_paths();
             match self.sidebar_tab {
                 SidebarTab::Playlist => {
                     self.playlist_candidate = playlist_candidate_for_open(
                         self.playlist_candidate.or(current_index),
-                        playlist_paths.len(),
+                        playlist_len,
                     );
                 }
                 SidebarTab::History => {
@@ -1262,7 +1352,7 @@ impl eframe::App for PlayerApp {
                                 SidebarTab::Playlist => {
                                     self.playlist_candidate = playlist_candidate_for_open(
                                         self.playlist_candidate.or(current_index),
-                                        playlist_paths.len(),
+                                        playlist_len,
                                     );
                                     self.history_candidate = None;
                                 }
@@ -1295,7 +1385,7 @@ impl eframe::App for PlayerApp {
                             SidebarTab::Playlist => {
                                 playlist_commands.extend(crate::playlist_panel::playlist_panel(
                                     ui,
-                                    &playlist_paths,
+                                    playlist_paths,
                                     current_index,
                                     self.playlist_candidate,
                                 ));
@@ -1405,7 +1495,7 @@ impl eframe::App for PlayerApp {
                                             &mut self.playlist_auto_hidden,
                                             &mut self.playlist_candidate,
                                             current_index,
-                                            playlist_paths.len(),
+                                            playlist_len,
                                         );
                                         if self.show_playlist {
                                             playlist_opened_this_frame = true;
@@ -1525,6 +1615,61 @@ impl eframe::App for PlayerApp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prefs_path_uses_platform_config_directory() {
+        let env = super::PrefsPathEnv {
+            home: Some(std::path::PathBuf::from("/home/alice")),
+            appdata: Some(std::path::PathBuf::from("C:/Users/alice/AppData/Roaming")),
+            xdg_config_home: Some(std::path::PathBuf::from("/xdg/alice")),
+        };
+
+        let path = super::prefs_path_from_env(&env);
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("C:/Users/alice/AppData/Roaming/Morn/prefs.json")
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/home/alice/Library/Application Support/Morn/prefs.json")
+        );
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        assert_eq!(path, std::path::PathBuf::from("/xdg/alice/morn/prefs.json"));
+    }
+
+    #[test]
+    fn legacy_temp_preferences_are_migrated_without_overwriting_existing_config() {
+        let root = std::env::temp_dir().join(format!(
+            "morn_prefs_migrate_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let legacy = root.join("legacy/morn-prefs.json");
+        let preferred = root.join("config/Morn/prefs.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, r#"{"volume":42}"#).unwrap();
+
+        super::migrate_legacy_prefs(&legacy, &preferred).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&preferred).unwrap(),
+            r#"{"volume":42}"#
+        );
+
+        std::fs::write(&legacy, r#"{"volume":5}"#).unwrap();
+        super::migrate_legacy_prefs(&legacy, &preferred).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&preferred).unwrap(),
+            r#"{"volume":42}"#
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn reveal_file_command_uses_platform_file_manager() {
         #[cfg(target_os = "windows")]

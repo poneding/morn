@@ -109,9 +109,19 @@ fn release_source_url() -> Option<String> {
         option_env!("GITHUB_REPOSITORY"),
         option_env!("CARGO_PKG_REPOSITORY"),
     )
-    .or_else(|| {
+    .or_else(git_remote_release_source_url)
+}
+
+fn git_remote_release_source_url() -> Option<String> {
+    #[cfg(debug_assertions)]
+    {
         read_git_remote_origin_url().and_then(|repo| github_releases_url_from_repository(&repo))
-    })
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
 }
 
 fn configured_release_source_url(
@@ -161,6 +171,7 @@ fn github_releases_url_from_repository(repository: &str) -> Option<String> {
     ))
 }
 
+#[cfg(debug_assertions)]
 fn read_git_remote_origin_url() -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["config", "--get", "remote.origin.url"])
@@ -288,5 +299,17 @@ mod tests {
             .as_deref(),
             Some("https://api.github.com/repos/owner/repo/releases")
         );
+    }
+
+    #[test]
+    fn release_source_only_uses_git_remote_in_debug_builds() {
+        let source = include_str!("updater.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("#[cfg(debug_assertions)]"));
+        assert!(source.contains("read_git_remote_origin_url()"));
+        assert!(source.contains("#[cfg(not(debug_assertions))]"));
     }
 }

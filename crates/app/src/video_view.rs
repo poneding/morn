@@ -36,6 +36,21 @@ fn stale_future_after_seek(master_ms: u64, pts_ms: u64) -> bool {
     pts_ms.saturating_sub(master_ms) > STALE_FUTURE_AFTER_SEEK_MS
 }
 
+fn future_frame_repaint_delay_ms(
+    remaining_ms: u64,
+    tolerance_ms: u64,
+    rate_pct: u16,
+) -> Option<u64> {
+    if remaining_ms <= tolerance_ms {
+        return None;
+    }
+
+    let rate = u64::from(rate_pct).max(1);
+    let wait_ms = remaining_ms - tolerance_ms;
+    let scaled = wait_ms.saturating_mul(100);
+    Some(scaled.div_ceil(rate).max(1))
+}
+
 fn empty_state_contents(ui: &mut egui::Ui, commands: &mut Vec<Command>) {
     ui.vertical_centered(|ui| {
         ui.label(t!("drop_hint").to_string());
@@ -108,7 +123,8 @@ impl VideoView {
         player: &Player,
     ) -> Vec<Command> {
         let mut commands = Vec::new();
-        let master_ms = player.timeline().position_ms;
+        let timeline = player.timeline();
+        let master_ms = timeline.position_ms;
 
         // seek 会让时钟单帧大幅跳变; 之前暂存的"未来帧"已失效。
         let jumped = master_ms.saturating_add(SEEK_JUMP_MS) < self.last_master_ms
@@ -144,6 +160,19 @@ impl VideoView {
                             continue;
                         }
                         self.recovering_after_seek = false;
+                        if timeline.state == player_core::PlaybackState::Playing {
+                            let remaining_ms = vf.pts_ms.saturating_sub(master_ms);
+                            if let Some(delay_ms) = future_frame_repaint_delay_ms(
+                                remaining_ms,
+                                FRAME_TOL_MS,
+                                timeline.rate_pct,
+                            ) {
+                                ui.ctx()
+                                    .request_repaint_after(std::time::Duration::from_millis(
+                                        delay_ms,
+                                    ));
+                            }
+                        }
                         self.pending = Some(vf);
                         break;
                     }
@@ -194,6 +223,9 @@ impl VideoView {
             None => true,
         };
         if need_new {
+            if let Some(id) = self.tex_id.take() {
+                render_state.renderer.write().free_texture(&id);
+            }
             let tex = VideoTexture::new(device, vf.width, vf.height);
             let view = tex.create_view();
             let id = render_state.renderer.write().register_native_texture(
@@ -246,6 +278,19 @@ mod tests {
         assert_eq!(frame_action(1000, 1010, TOL), FrameAction::Show); // 容差内
         assert_eq!(frame_action(2000, 1000, TOL), FrameAction::Discard); // 已过期
         assert_eq!(frame_action(1000, 2000, TOL), FrameAction::Hold); // 未来帧: 必须 Hold
+    }
+
+    #[test]
+    fn future_frame_repaint_delay_enters_tolerance_window() {
+        assert_eq!(future_frame_repaint_delay_ms(TOL + 16, TOL, 100), Some(16));
+        assert_eq!(future_frame_repaint_delay_ms(TOL + 1, TOL, 100), Some(1));
+        assert_eq!(future_frame_repaint_delay_ms(TOL, TOL, 100), None);
+    }
+
+    #[test]
+    fn future_frame_repaint_delay_respects_playback_rate() {
+        assert_eq!(future_frame_repaint_delay_ms(TOL + 100, TOL, 200), Some(50));
+        assert_eq!(future_frame_repaint_delay_ms(TOL + 100, TOL, 50), Some(200));
     }
 
     /// 模拟一次 show() 的取帧循环: 返回应显示帧的 PTS(或 None=保持当前画面)。
@@ -390,6 +435,28 @@ mod tests {
         assert!(source.contains("ui.painter().image"));
         assert!(!source.contains("centered_and_justified"));
         assert!(!source.contains("ui.image((id, draw))"));
+    }
+
+    #[test]
+    fn texture_replacement_frees_previous_native_texture_id() {
+        let source = include_str!("video_view.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let replacement_source = source
+            .split("if need_new")
+            .nth(1)
+            .unwrap()
+            .split("self.last_frame")
+            .next()
+            .unwrap();
+
+        assert!(replacement_source.contains("self.tex_id.take()"));
+        assert!(replacement_source.contains("free_texture(&id)"));
+        assert!(
+            replacement_source.find("free_texture(&id)").unwrap()
+                < replacement_source.find("register_native_texture").unwrap()
+        );
     }
 
     #[test]

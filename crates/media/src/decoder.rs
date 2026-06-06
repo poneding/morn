@@ -9,6 +9,10 @@ use ffmpeg_next as ff;
 use ffmpeg_sys_next as sys;
 use std::path::Path;
 
+const MAX_VIDEO_WIDTH: u32 = 8192;
+const MAX_VIDEO_HEIGHT: u32 = 8192;
+const MAX_VIDEO_PIXELS: u64 = 7680 * 4320;
+
 pub struct VideoDecoder {
     ictx: ff::format::context::Input,
     decoder: ff::decoder::Video,
@@ -31,6 +35,22 @@ impl VideoDecoder {
     }
 
     pub fn open_with_options(path: &Path, opts: DecodeOptions) -> Result<Self, MediaError> {
+        match Self::open_inner(path, opts) {
+            Ok(decoder) => Ok(decoder),
+            Err(err) if opts.try_hardware => {
+                let software_opts = DecodeOptions {
+                    try_hardware: false,
+                };
+                match Self::open_inner(path, software_opts) {
+                    Ok(decoder) => Ok(decoder),
+                    Err(_) => Err(err),
+                }
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn open_inner(path: &Path, opts: DecodeOptions) -> Result<Self, MediaError> {
         ff::init()?;
         let ictx = ff::format::input(&path)?;
         let stream = ictx
@@ -73,6 +93,7 @@ impl VideoDecoder {
 
         let decoder = ctx.decoder().video()?;
         let (width, height) = (decoder.width(), decoder.height());
+        validate_video_dimensions(width, height)?;
 
         Ok(Self {
             ictx,
@@ -210,5 +231,50 @@ impl VideoDecoder {
             out.extend_from_slice(&src[start..start + row_bytes]);
         }
         Ok(VideoFrame::new(self.width, self.height, pts_ms, out))
+    }
+}
+
+fn validate_video_dimensions(width: u32, height: u32) -> Result<(), MediaError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width == 0
+        || height == 0
+        || width > MAX_VIDEO_WIDTH
+        || height > MAX_VIDEO_HEIGHT
+        || pixels > MAX_VIDEO_PIXELS
+    {
+        Err(MediaError::InvalidVideoDimensions { width, height })
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn video_dimensions_guard_accepts_common_resolutions() {
+        assert!(validate_video_dimensions(1920, 1080).is_ok());
+        assert!(validate_video_dimensions(3840, 2160).is_ok());
+    }
+
+    #[test]
+    fn video_dimensions_guard_rejects_empty_or_excessive_frames() {
+        assert!(validate_video_dimensions(0, 1080).is_err());
+        assert!(validate_video_dimensions(1920, 0).is_err());
+        assert!(validate_video_dimensions(MAX_VIDEO_WIDTH + 1, 1080).is_err());
+        assert!(validate_video_dimensions(8192, 8192).is_err());
+    }
+
+    #[test]
+    fn hardware_open_failure_retries_with_software_decode() {
+        let source = include_str!("decoder.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("fn open_inner"));
+        assert!(source.contains("try_hardware: false"));
+        assert!(source.contains("Self::open_inner(path, software_opts)"));
     }
 }

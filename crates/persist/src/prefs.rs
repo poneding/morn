@@ -143,8 +143,26 @@ impl Preferences {
         let mut prefs = self.clone();
         prefs.normalize_paths();
         let json = serde_json::to_string_pretty(&prefs).map_err(std::io::Error::other)?;
-        std::fs::write(path, json)
+        let tmp = temp_save_path(path);
+        std::fs::write(&tmp, json)?;
+        replace_file(&tmp, path)
     }
+}
+
+fn temp_save_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("prefs.json");
+    path.with_file_name(format!(".{name}.tmp-{}", std::process::id()))
+}
+
+fn replace_file(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    std::fs::rename(tmp, path)
 }
 
 #[cfg(test)]
@@ -301,8 +319,10 @@ mod tests {
     fn save_legacy_tilde_screenshot_dir_writes_resolved_path() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("prefs.json");
-        let mut prefs = Preferences::default();
-        prefs.screenshot_dir = "~\\Pictures\\Morn".to_string();
+        let prefs = Preferences {
+            screenshot_dir: "~\\Pictures\\Morn".to_string(),
+            ..Default::default()
+        };
 
         prefs.save(&path).unwrap();
         let saved = std::fs::read_to_string(&path).unwrap();

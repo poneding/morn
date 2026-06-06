@@ -1,8 +1,7 @@
 use objc2::rc::Retained;
 use objc2::{msg_send, ClassType};
 use objc2_app_kit::{
-    NSApplication, NSBitmapImageRep, NSColor, NSDeviceRGBColorSpace, NSImage,
-    NSImageNameApplicationIcon,
+    NSApplication, NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage, NSImageNameApplicationIcon,
 };
 use objc2_foundation::{ns_string, MainThreadMarker, NSBundle, NSSize, NSString};
 
@@ -89,30 +88,6 @@ fn ns_image_from_png(icon_png: &[u8]) -> Option<Retained<NSImage>> {
     Some(image)
 }
 
-pub fn configure_frameless_window_appearance() -> bool {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return false;
-    };
-    let app = NSApplication::sharedApplication(mtm);
-    let Some(window) = (unsafe { app.mainWindow() }) else {
-        return false;
-    };
-    let Some(content_view) = window.contentView() else {
-        return false;
-    };
-
-    let clear = unsafe { NSColor::clearColor() };
-    window.setOpaque(false);
-    window.setBackgroundColor(Some(&clear));
-    window.setHasShadow(true);
-    content_view.setWantsLayer(true);
-    if let Some(layer) = unsafe { content_view.layer() } {
-        layer.setCornerRadius(10.0);
-        layer.setMasksToBounds(true);
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -157,19 +132,5 @@ mod tests {
         assert!(!source.contains("checkForUpdates:"));
         assert!(!source.contains("CHECK_UPDATES_MENU_TAG"));
         assert!(!source.contains("NSAlert"));
-    }
-
-    #[test]
-    fn frameless_window_appearance_uses_content_view_corner_mask() {
-        let source = include_str!("macos.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
-
-        assert!(source.contains("configure_frameless_window_appearance"));
-        assert!(source.contains("setOpaque(false)"));
-        assert!(source.contains("clearColor"));
-        assert!(source.contains("setCornerRadius"));
-        assert!(source.contains("setMasksToBounds(true)"));
     }
 }

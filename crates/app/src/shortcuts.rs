@@ -4,8 +4,11 @@ use eframe::egui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShortcutPlatform {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Macos,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Windows,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Linux,
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     Other,
@@ -15,15 +18,15 @@ impl ShortcutPlatform {
     pub fn current() -> Self {
         #[cfg(target_os = "macos")]
         {
-            return Self::Macos;
+            Self::Macos
         }
         #[cfg(target_os = "windows")]
         {
-            return Self::Windows;
+            Self::Windows
         }
         #[cfg(target_os = "linux")]
         {
-            return Self::Linux;
+            Self::Linux
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
@@ -137,7 +140,7 @@ pub fn format_rate_label(rate_pct: u16) -> String {
     let frac = rate_pct % 100;
     if frac == 0 {
         format!("{whole}x")
-    } else if frac % 10 == 0 {
+    } else if frac.is_multiple_of(10) {
         format!("{whole}.{}x", frac / 10)
     } else {
         format!("{whole}.{frac:02}x")

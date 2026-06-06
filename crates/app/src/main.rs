@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod app;
 mod controls;
 mod enhance;
@@ -100,6 +105,17 @@ mod tests {
         assert!(source.contains(".with_decorations(true)"));
         assert!(source.contains(".with_transparent(false)"));
         assert!(!source.contains("with_fullsize_content_view(true)"));
+    }
+
+    #[test]
+    fn release_windows_build_uses_gui_subsystem() {
+        let source = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("windows_subsystem = \"windows\""));
+        assert!(source.contains("not(debug_assertions)"));
     }
 
     #[test]

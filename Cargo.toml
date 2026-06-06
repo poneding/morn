@@ -4,11 +4,17 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2021"
-version = "0.1.1"
+version = "0.1.2"
 license = "MIT"
+repository = "https://github.com/poneding/morn"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 crossbeam-channel = "0.5"
 thiserror = "2"
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1

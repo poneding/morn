@@ -33,6 +33,10 @@ impl Playlist {
         self.items.iter()
     }
 
+    pub fn as_slice(&self) -> &[PathBuf] {
+        &self.items
+    }
+
     pub fn current_index(&self) -> Option<usize> {
         if self.items.is_empty() {
             None

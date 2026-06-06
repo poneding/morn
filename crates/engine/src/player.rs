@@ -168,8 +168,8 @@ impl Player {
         self.video.as_ref().map(DecodeThread::dimensions)
     }
 
-    pub fn playlist_paths(&self) -> Vec<std::path::PathBuf> {
-        self.playlist.iter().map(|p| p.to_path_buf()).collect()
+    pub fn playlist_paths(&self) -> &[std::path::PathBuf] {
+        self.playlist.as_slice()
     }
 
     pub fn current_index(&self) -> Option<usize> {
@@ -768,6 +768,15 @@ mod tests {
         assert_eq!(p.playlist_paths(), vec![a]);
         p.handle(Command::Stop);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn playlist_paths_are_exposed_as_borrowed_slice() {
+        fn assert_slice(_: &[std::path::PathBuf]) {}
+
+        let p = Player::new();
+
+        assert_slice(p.playlist_paths());
     }
 
     #[test]

@@ -9,9 +9,8 @@ name = "morn"
 path = "src/main.rs"
 
 [dependencies]
-eframe = { version = "0.34", features = ["persistence"] }
+eframe = "0.34"
 egui = "0.34"
-egui-wgpu = "0.34"
 wgpu = "29.0"
 engine = { path = "../engine" }
 player-core = { path = "../player-core" }

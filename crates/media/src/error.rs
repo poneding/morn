@@ -8,4 +8,6 @@ pub enum MediaError {
     NoStream(&'static str),
     #[error("hardware frame transfer failed")]
     HwTransfer,
+    #[error("invalid video dimensions: {width}x{height}")]
+    InvalidVideoDimensions { width: u32, height: u32 },
 }

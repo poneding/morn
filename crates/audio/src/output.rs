@@ -85,6 +85,9 @@ impl AudioOutput {
         let config: cpal::StreamConfig = supported.into();
         let channels = config.channels;
         let sample_rate = config.sample_rate;
+        if !is_supported_sample_format(sample_format) {
+            return Err(format!("不支持的采样格式: {sample_format:?}"));
+        }
 
         let clock = MasterClock::new(sample_rate);
         let clock_cb = clock.clone();
@@ -116,6 +119,26 @@ impl AudioOutput {
                     None,
                 )
                 .map_err(|e| e.to_string())?,
+            SampleFormat::U16 => device
+                .build_output_stream(
+                    &config,
+                    move |data: &mut [u16], _| {
+                        if flush.swap(false, Ordering::Relaxed) {
+                            while consumer.try_pop().is_some() {}
+                        }
+                        let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
+                        let mut filled = 0u64;
+                        for slot in data.iter_mut() {
+                            let s = consumer.try_pop().unwrap_or(0.0) * g;
+                            *slot = u16::from_sample(s);
+                            filled += 1;
+                        }
+                        clock_cb.add_frames(filled / ch);
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| e.to_string())?,
             SampleFormat::I16 => device
                 .build_output_stream(
                     &config,
@@ -136,7 +159,7 @@ impl AudioOutput {
                     None,
                 )
                 .map_err(|e| e.to_string())?,
-            other => panic!("不支持的采样格式: {other:?}"),
+            other => return Err(format!("不支持的采样格式: {other:?}")),
         };
 
         stream.play().map_err(|e| format!("启动音频流失败: {e}"))?;
@@ -149,6 +172,13 @@ impl AudioOutput {
             sample_rate,
         })
     }
+}
+
+fn is_supported_sample_format(format: SampleFormat) -> bool {
+    matches!(
+        format,
+        SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+    )
 }
 
 /// 不含 producer 的音频句柄, 留在 Player 中。
@@ -286,5 +316,12 @@ mod tests {
             (estimated - 440.0).abs() < 8.0,
             "expected pitch near 440Hz after 2x tempo, got {estimated:.1}Hz"
         );
+    }
+
+    #[test]
+    fn supported_output_sample_formats_include_unsigned_16_bit() {
+        assert!(super::is_supported_sample_format(cpal::SampleFormat::F32));
+        assert!(super::is_supported_sample_format(cpal::SampleFormat::I16));
+        assert!(super::is_supported_sample_format(cpal::SampleFormat::U16));
     }
 }

@@ -86,10 +86,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Lint
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --locked --workspace --all-targets
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
   build:
     name: Build ${{ matrix.asset_suffix }}
@@ -179,7 +179,7 @@ jobs:
 
       - name: Install Linux packaging tools
         if: runner.os == 'Linux'
-        run: sudo gem install --no-document fpm
+        run: sudo gem install --no-document fpm -v 1.17.0
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
@@ -205,7 +205,7 @@ jobs:
           cargo install cargo-packager --version 0.11.8 --locked
 
           $vcpkgRoot = Join-Path $env:RUNNER_TEMP "vcpkg"
-          git clone --depth 1 https://github.com/microsoft/vcpkg $vcpkgRoot
+          git clone --branch 2026.05.25 --depth 1 https://github.com/microsoft/vcpkg $vcpkgRoot
           & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
 
           $triplet = "${{ matrix.vcpkg_triplet }}"
@@ -225,7 +225,7 @@ jobs:
 
       - name: Build release binary
         shell: bash
-        run: cargo build --release -p app --bin morn --target "${{ matrix.rust_target }}"
+        run: cargo build --locked --release -p app --bin morn --target "${{ matrix.rust_target }}"
 
       - name: Package Linux release assets
         if: runner.os == 'Linux'

@@ -7,6 +7,7 @@ deb_arch="${3:?deb architecture is required}"
 rpm_arch="${4:?rpm architecture is required}"
 appimage_arch="${5:?AppImage architecture is required}"
 release_tag="${RELEASE_TAG:?RELEASE_TAG is required}"
+linuxdeploy_version="${LINUXDEPLOY_VERSION:-1-alpha-20251107-1}"
 
 version="${release_tag#v}"
 deb_version="${version}"
@@ -100,10 +101,23 @@ exec "${here}/usr/bin/morn" "$@"
 EOF
 chmod +x "${appdir}/AppRun"
 
+linuxdeploy_sha256="${LINUXDEPLOY_SHA256:-}"
+case "${appimage_arch}" in
+  x86_64)
+    linuxdeploy_sha256="${LINUXDEPLOY_X86_64_SHA256:-${linuxdeploy_sha256:-c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d}}"
+    ;;
+  aarch64)
+    linuxdeploy_sha256="${LINUXDEPLOY_AARCH64_SHA256:-${linuxdeploy_sha256:-620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff}}"
+    ;;
+esac
+
 linuxdeploy="dist/linuxdeploy-${appimage_arch}.AppImage"
 curl -fsSL \
-  "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${appimage_arch}.AppImage" \
+  "https://github.com/linuxdeploy/linuxdeploy/releases/download/${linuxdeploy_version}/linuxdeploy-${appimage_arch}.AppImage" \
   -o "${linuxdeploy}"
+if [[ -n "${linuxdeploy_sha256}" ]]; then
+  echo "${linuxdeploy_sha256}  ${linuxdeploy}" | sha256sum -c -
+fi
 chmod +x "${linuxdeploy}"
 
 APPIMAGE_EXTRACT_AND_RUN=1 \
