@@ -31,6 +31,7 @@ impl AudioDecoder {
 
     fn open_inner(path: &Path, output_rate: Option<u32>) -> Result<Self, MediaError> {
         ff::init()?;
+        crate::quiet_ffmpeg_logs_once();
         let ictx = ff::format::input(&path)?;
         let stream = ictx
             .streams()
