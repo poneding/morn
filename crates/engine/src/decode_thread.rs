@@ -15,6 +15,13 @@ pub enum FramePull {
     End,
 }
 
+/// seek 模式: 精确(解码追赶到目标, 首帧 PTS≥目标)或关键帧吸附(落点即出帧, 秒播)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeekMode {
+    Exact,
+    Keyframe,
+}
+
 /// 帧通道载荷: (发出时的 seek 代次 serial, 帧)。
 type SerialFrame = (u64, VideoFrame);
 
@@ -23,7 +30,7 @@ pub struct DecodeThread {
     // 帧带 serial(发出时的 applied_seek_seq): 取帧侧只放行 serial == 当前请求代次的帧,
     // seek 前已发出/发送中的旧帧被静默丢弃(ffplay 的 serial flush 思路)。
     rx: Receiver<SerialFrame>,
-    seek_tx: Sender<u64>,
+    seek_tx: Sender<(u64, SeekMode)>,
     stop: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
     hw_active: Arc<AtomicBool>,
@@ -47,7 +54,7 @@ impl DecodeThread {
         drop(decoder);
         let owned_path = path.to_path_buf(); // VideoDecoder !Send, 移动路径而非解码器
         let (tx, rx): (Sender<SerialFrame>, Receiver<SerialFrame>) = bounded(queue_cap);
-        let (seek_tx, seek_rx) = crossbeam_channel::unbounded::<u64>();
+        let (seek_tx, seek_rx) = crossbeam_channel::unbounded::<(u64, SeekMode)>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let ended = Arc::new(AtomicBool::new(false));
@@ -56,7 +63,7 @@ impl DecodeThread {
         let hw_active_t = hw_active.clone();
         let frame_pending = Arc::new(AtomicBool::new(false));
         let frame_pending_t = frame_pending.clone();
-        let last_pts = Arc::new(AtomicU64::new(0));
+        let last_pts = Arc::new(AtomicU64::new(u64::MAX));
         let last_pts_t = last_pts.clone();
         let requested_seek_seq = Arc::new(AtomicU64::new(0));
         let requested_seek_seq_t = requested_seek_seq.clone();
@@ -78,13 +85,17 @@ impl DecodeThread {
                 while let Ok(t) = seek_rx.try_recv() {
                     pending = Some(t);
                 }
-                if let Some(t) = pending {
-                    let _ = decoder.seek_ms(t);
+                if let Some((t, mode)) = pending {
+                    let _ = match mode {
+                        SeekMode::Exact => decoder.seek_ms(t),
+                        SeekMode::Keyframe => decoder.seek_ms_keyframe(t),
+                    };
                     ended_thread.store(false, Ordering::Relaxed);
                     eof = false;
-                    // 复位: 否则 seek 前的旧 PTS 会让 seek-gate 误判"已追到目标"(尤其向后 seek)。
-                    last_pts_t.store(0, Ordering::Relaxed);
-                    // 标记本批 seek 已应用(取当前请求代次), 之后 last_pts 才反映 seek 后的解码进度。
+                    // 哨兵 u64::MAX = "seek 后尚未出帧"; 首帧落地后才反映 seek 后的解码进度,
+                    // 否则旧 PTS 会让 seek 闸门误判(尤其向后 seek)。
+                    last_pts_t.store(u64::MAX, Ordering::Relaxed);
+                    // 标记本批 seek 已应用(取当前请求代次), 之后的帧才带新 serial。
                     applied_seek_seq_t.store(
                         requested_seek_seq_t.load(Ordering::Relaxed),
                         Ordering::Relaxed,
@@ -169,11 +180,11 @@ impl DecodeThread {
         self.dimensions
     }
 
-    /// 请求 seek 到目标毫秒, 由解码线程在下一轮循环开头应用。返回本次请求的代次号,
-    /// 调用方据此配合 applied_seek_seq() 判断该 seek 是否已被解码线程实际应用。
-    pub fn request_seek(&self, ms: u64) -> u64 {
+    /// 请求 seek 到目标毫秒(按指定模式), 由解码线程在下一轮循环开头应用。返回本次
+    /// 请求的代次号, 调用方据此配合 applied_seek_seq() 判断该 seek 是否已实际生效。
+    pub fn request_seek(&self, ms: u64, mode: SeekMode) -> u64 {
         let seq = self.requested_seek_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.seek_tx.send(ms);
+        let _ = self.seek_tx.send((ms, mode));
         seq
     }
 
@@ -188,9 +199,14 @@ impl DecodeThread {
         self.frame_pending.swap(false, Ordering::Relaxed)
     }
 
-    /// 最近一帧已发出的 PTS(毫秒)。seek 后复位为 0, 仅反映 seek 之后的解码进度。
-    pub fn last_decoded_pts_ms(&self) -> u64 {
-        self.last_pts.load(Ordering::Relaxed)
+    /// seek 应用后最近已发出帧的 PTS(毫秒); 尚未出帧时为 None。
+    /// 精确 seek: 首帧即 ≥ 目标(闸门据此放行); 关键帧吸附: 读取时刻的最新帧
+    /// 即吸附落点(时钟/音频对齐到它, 更早的队列帧被 present 自然丢弃)。
+    pub fn latest_pts_after_seek(&self) -> Option<u64> {
+        match self.last_pts.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            pts => Some(pts),
+        }
     }
 
     /// 解码是否已到流尾(或出错终止)。
@@ -311,7 +327,7 @@ mod tests {
         }
         assert_eq!(handle.queue_len(), 8, "队列未填满, 无法构造竞态前提");
 
-        handle.request_seek(0);
+        handle.request_seek(0, SeekMode::Exact);
 
         // 取帧: 返回的第一帧必须是 seek 之后解出的——即此刻 applied_seek_seq 已 ≥1。
         // 无 serial 过滤时, 这里会立刻拿到队列里的旧帧(applied 仍为 0)而失败。

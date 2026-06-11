@@ -4,7 +4,7 @@ mod play_clock;
 mod player;
 mod timeline;
 mod wall_clock;
-pub use decode_thread::{DecodeThread, FramePull};
+pub use decode_thread::{DecodeThread, FramePull, SeekMode};
 pub use persist::PlaybackMode;
 pub use play_clock::PlayClock;
 pub use player::Player;

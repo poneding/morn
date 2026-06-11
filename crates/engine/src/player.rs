@@ -1,4 +1,4 @@
-use crate::decode_thread::DecodeThread;
+use crate::decode_thread::{DecodeThread, SeekMode};
 use crate::play_clock::PlayClock;
 use crate::timeline::Timeline;
 use crate::wall_clock::WallClock;
@@ -29,13 +29,15 @@ enum PendingAnchor {
     Target(u64),
 }
 
-/// seek 闸门: seek 后冻结主时钟(音频经回调消费闸门, 墙钟经 pause),
-/// 直到视频解出"当前代次且 PTS ≥ 目标"的帧(或到流尾)才放行。
-/// 否则音频先就绪、时钟先跑, 视频边解边追 → seek 后持续丢帧/跳跃。
-struct SeekGate {
-    /// request_seek 返回的代次号, 用 applied_seek_seq 判断 seek 已实际生效。
-    seq: u64,
-    target_ms: u64,
+/// seek 闸门: seek 后冻结主时钟(音频经回调消费闸门, 墙钟经 pause), 视频就绪才放行,
+/// 避免音频先就绪、时钟先跑, 视频边解边追的 seek 后跳跃。
+#[derive(Clone, Copy)]
+enum SeekGate {
+    /// 精确模式(内部 seek): 等"当前代次且 PTS ≥ 目标"的帧(或流尾)。
+    Exact { seq: u64, target_ms: u64 },
+    /// 关键帧吸附(UI seek, 秒播): 等当前代次首帧落地, 放行时把时钟/音频对齐到它;
+    /// 落点处无帧(流尾外)时按 fallback_target_ms 兜底。
+    Keyframe { seq: u64, fallback_target_ms: u64 },
 }
 
 /// 诊断探针: 环境变量 MORN_DEBUG 置位时, present 每秒打印一行关键指标到 stderr。
@@ -464,24 +466,49 @@ impl Player {
         self.volume_shared.store(v.min(100), Ordering::Relaxed);
     }
 
+    /// 内部精确 seek(续播恢复/重播/结束重置): 解码追赶到目标, 起播帧 PTS ≥ 目标。
     fn seek_to(&mut self, ms: u64) {
+        self.seek_impl(ms, SeekMode::Exact);
+    }
+
+    /// UI seek(进度条/方向键): 关键帧吸附——落点即出帧不追赶(秒播),
+    /// 放行时把时钟与音频对齐到落点帧 PTS。主流播放器的快进策略。
+    fn seek_to_fast(&mut self, ms: u64) {
+        self.seek_impl(ms, SeekMode::Keyframe);
+    }
+
+    fn seek_impl(&mut self, ms: u64, mode: SeekMode) {
         let target = if self.duration_ms > 0 {
             ms.min(self.duration_ms)
         } else {
             ms
         };
         self.playback_ended = false;
-        let mut gate_seq = None;
+        let mut gate = None;
         if let Some(v) = &self.video {
-            gate_seq = Some(v.request_seek(target));
+            let seq = v.request_seek(target, mode);
             // 排空已缓冲的旧帧, 尽快解除解码线程的发送阻塞让它看到 seek;
             // 竞态溜进来的旧帧由 serial 过滤兜底。
             while v.try_recv_frame().is_some() {}
+            gate = Some(match mode {
+                SeekMode::Exact => SeekGate::Exact {
+                    seq,
+                    target_ms: target,
+                },
+                SeekMode::Keyframe => SeekGate::Keyframe {
+                    seq,
+                    fallback_target_ms: target,
+                },
+            });
         }
         // seek 丢弃当前/暂存帧, 让 present 从新位置重新选帧。
         self.current_frame = None;
         self.pending_frame = None;
-        self.audio_seek.store(target, Ordering::Relaxed);
+        // 精确模式音频立即 seek 到目标; 吸附模式等落点帧确定后再对齐
+        // (放行时发起, 避免先解到目标再折回关键帧)。
+        if matches!(mode, SeekMode::Exact) {
+            self.audio_seek.store(target, Ordering::Relaxed);
+        }
         // 丢弃环形缓冲里约 1s 的旧音频, 否则 seek 后旧声音还会续播一会儿。
         self.audio_flush.store(true, Ordering::Relaxed);
         // 若之前因音频 EOF 切到了墙钟, 且音频线程还活着(会在新位置重新供样本),
@@ -497,11 +524,8 @@ impl Player {
         }
         self.clock.reset_to(target);
         // 挂起 seek 闸门: 冻结主时钟(音频钟经回调消费闸门, 墙钟经 pause),
-        // 待视频解出目标帧后在 present/tick 里放行——画面与声音从目标处同步起步。
-        self.seek_gate = gate_seq.map(|seq| SeekGate {
-            seq,
-            target_ms: target,
-        });
+        // 待视频解出落点/目标帧后在 present/tick 里放行——画面与声音同步起步。
+        self.seek_gate = gate;
         self.audio_gate
             .store(self.seek_gate.is_some(), Ordering::Relaxed);
         if self.seek_gate.is_some() {
@@ -509,28 +533,61 @@ impl Player {
         }
     }
 
-    /// seek 闸门是否仍在等待视频解出目标帧(app 在挂起期间保持重绘以驱动放行)。
+    /// seek 闸门是否仍在等待视频解出落点帧(app 在挂起期间保持重绘以驱动放行)。
     pub fn seek_pending(&self) -> bool {
         self.seek_gate.is_some()
     }
 
-    /// 视频已解出"当前代次且 PTS ≥ 目标"的帧(或到流尾)时放行 seek 闸门。
+    /// 闸门放行判定: 精确模式等"当前代次且 PTS ≥ 目标"的帧(或流尾);
+    /// 吸附模式等当前代次首帧落地, 并把时钟/音频对齐到该帧 PTS。
     fn maybe_release_seek_gate(&mut self) {
-        let Some(g) = &self.seek_gate else {
+        let Some(gate) = self.seek_gate else {
             return;
         };
-        let ready = match &self.video {
-            Some(v) => {
-                v.applied_seek_seq() >= g.seq
-                    && (v.last_decoded_pts_ms() + PRESENT_TOL_MS >= g.target_ms || v.is_ended())
-            }
+        // None=继续等; Some(align)=放行(align 为吸附模式的对齐位置)。
+        let release: Option<Option<u64>> = match &self.video {
             // 视频解码线程已不在(异常路径): 没有可等的帧, 直接放行。
-            None => true,
+            None => Some(None),
+            Some(v) => match gate {
+                SeekGate::Exact { seq, target_ms } => {
+                    let ready = v.applied_seek_seq() >= seq
+                        && (v
+                            .latest_pts_after_seek()
+                            .is_some_and(|p| p + PRESENT_TOL_MS >= target_ms)
+                            || v.is_ended());
+                    ready.then_some(None)
+                }
+                SeekGate::Keyframe {
+                    seq,
+                    fallback_target_ms,
+                } => {
+                    if v.applied_seek_seq() < seq {
+                        None
+                    } else {
+                        match v.latest_pts_after_seek() {
+                            Some(p) => Some(Some(p)),
+                            // 落点处已无帧(seek 到流尾外): 按请求目标兜底对齐。
+                            None if v.is_ended() => Some(Some(fallback_target_ms)),
+                            None => None,
+                        }
+                    }
+                }
+            },
         };
-        if !ready {
-            return;
+        if let Some(align) = release {
+            self.finish_seek_gate(align);
         }
+    }
+
+    /// 放行闸门; 吸附模式把时钟与音频对齐到落点 `align_to_ms`(精确模式传 None)。
+    fn finish_seek_gate(&mut self, align_to_ms: Option<u64>) {
         self.seek_gate = None;
+        if let Some(t) = align_to_ms {
+            self.audio_seek.store(t, Ordering::Relaxed);
+            // 先置 flush 再开消费闸门: 回调下一次运行先清掉旧样本, 不会放出旧声音。
+            self.audio_flush.store(true, Ordering::Relaxed);
+            self.clock.reset_to(t);
+        }
         self.audio_gate.store(false, Ordering::Relaxed);
         if self.machine.state() == player_core::PlaybackState::Playing {
             self.clock.resume();
@@ -693,7 +750,7 @@ impl Player {
             Command::OpenDialog => {}
             Command::OpenFolder => {}
             Command::SeekTo(ms) => {
-                self.seek_to(ms);
+                self.seek_to_fast(ms);
             }
             Command::SetRate(pct) => {
                 let pct = clamp_rate_pct(pct);
@@ -1106,9 +1163,10 @@ mod tests {
     }
 
     #[test]
-    fn seek_gates_clock_until_target_frame_then_playback_continues() {
-        // seek 闸门: SeekTo 后时钟冻结在目标处, 直到视频解出目标帧才放行,
-        // 否则音频先就绪、时钟先跑, 视频边解边追 → 持续丢帧/跳跃的"卡顿"观感。
+    fn ui_seek_snaps_to_keyframe_for_instant_playback() {
+        // UI seek(进度条/方向键)走关键帧吸附: 落点帧到达即放行(不解码追赶, 秒播),
+        // 时钟与音频对齐到落点帧 PTS。sample.mp4 只有 0ms 一个关键帧,
+        // 故 SeekTo(500) 放行后位置应回落到关键帧附近, 而不是停在 500。
         let path = fixture();
         assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
 
@@ -1125,17 +1183,66 @@ mod tests {
             p.present_frame();
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(!p.seek_pending(), "视频解出目标帧后闸门应放行");
+        assert!(!p.seek_pending(), "落点帧到达后闸门应放行");
         let pos = p.timeline().position_ms;
         assert!(
-            (480..=620).contains(&pos),
-            "放行时位置应仍在目标附近(时钟被闸住不追跑), 实际 {pos}ms"
+            pos <= 150,
+            "吸附放行后位置应对齐到关键帧(0ms)附近, 实际 {pos}ms"
         );
 
-        // 放行后播放继续推进(音频/墙钟驱动)。
-        let pos = drive_until_position(&mut p, 700, std::time::Duration::from_secs(3));
-        assert!(pos >= 700, "放行后播放应继续推进, 实际 {pos}ms");
+        // 吸附起播后继续推进(音频/墙钟驱动)。
+        let pos = drive_until_position(&mut p, 300, std::time::Duration::from_secs(3));
+        assert!(pos >= 300, "吸附起播后应继续推进, 实际 {pos}ms");
         p.handle(Command::Stop);
+    }
+
+    #[test]
+    fn resume_seek_is_exact_and_playback_continues_from_target() {
+        // 内部 seek(续播恢复)保持精确模式: 闸门等到"PTS≥目标"的帧才放行,
+        // 位置不回落关键帧; 恢复播放后从目标处继续推进。
+        let video = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let dir = std::env::temp_dir().join(format!(
+            "morn_resume_exact_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefs_path = dir.join("prefs.json");
+        let key = video.to_string_lossy().to_string();
+        let mut prefs = persist::Preferences::default();
+        prefs.last_playlist = vec![key.clone()];
+        prefs.last_index = 0;
+        prefs.set_resume_point(&key, 500);
+        prefs.save(&prefs_path).unwrap();
+
+        let mut player = Player::with_prefs(prefs_path);
+        assert!(player.restore_last_session_paused());
+        player.handle(Command::Play);
+
+        // 驱动闸门放行: 精确模式应停在目标附近(不回落到关键帧 0)。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while player.seek_pending() && std::time::Instant::now() < deadline {
+            player.present_frame();
+            player.tick();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!player.seek_pending(), "精确闸门应放行");
+        let pos = player.timeline().position_ms;
+        assert!(
+            (480..=650).contains(&pos),
+            "精确 seek 放行后位置应仍在目标附近, 实际 {pos}ms"
+        );
+
+        let pos = drive_until_position(&mut player, 700, std::time::Duration::from_secs(3));
+        assert!(pos >= 700, "续播后应从目标处继续推进, 实际 {pos}ms");
+        player.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

@@ -46,6 +46,25 @@ fn video_seek_emits_first_frame_at_or_after_target() {
 }
 
 #[test]
+fn video_keyframe_seek_emits_keyframe_immediately() {
+    // 关键帧吸附 seek(UI 快进用): 落到 ≤目标 的关键帧后直接出帧, 不解码追赶,
+    // 因此首帧 PTS ≤ 目标且几乎零延迟——配合引擎把时钟对齐到该帧实现"秒播"。
+    let path = fixture();
+    if !path.exists() {
+        return; // 无 fixture 时跳过(见 tests/gen_fixture.sh)
+    }
+
+    let mut dec = VideoDecoder::open(&path).unwrap();
+    dec.seek_ms_keyframe(500).unwrap();
+    let frame = dec.next_frame().unwrap().expect("关键帧 seek 后应立即出帧");
+    assert!(
+        frame.pts_ms <= 500,
+        "关键帧吸附首帧 PTS 应 ≤ 目标(sample.mp4 关键帧在 0), 实际 {}ms",
+        frame.pts_ms
+    );
+}
+
+#[test]
 fn audio_seek_still_decodes() {
     let path = fixture();
     if !path.exists() {
