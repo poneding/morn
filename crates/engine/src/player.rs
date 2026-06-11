@@ -625,7 +625,10 @@ impl Player {
                 if let Some(a) = &self.audio_out {
                     a.resume();
                 }
-                self.clock.resume();
+                // seek 闸门挂起时由放行逻辑统一恢复时钟, 此处不提前解冻。
+                if self.seek_gate.is_none() {
+                    self.clock.resume();
+                }
             }
             EndPlaybackAction::OpenPlaylistIndex(index) => {
                 self.playlist.set_cursor(index);
