@@ -16,10 +16,13 @@ pub enum FramePull {
 }
 
 /// seek 模式: 精确(解码追赶到目标, 首帧 PTS≥目标)或关键帧吸附(落点即出帧, 秒播)。
+/// 吸附必须带方向: 快进只向前吸附(目标后的首个关键帧), 快退向后——否则长 GOP
+/// 文件快进会落回当前位置之前, 画面倒退。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeekMode {
     Exact,
-    Keyframe,
+    KeyframeBackward,
+    KeyframeForward,
 }
 
 /// 帧通道载荷: (发出时的 seek 代次 serial, 帧)。
@@ -88,7 +91,8 @@ impl DecodeThread {
                 if let Some((t, mode)) = pending {
                     let _ = match mode {
                         SeekMode::Exact => decoder.seek_ms(t),
-                        SeekMode::Keyframe => decoder.seek_ms_keyframe(t),
+                        SeekMode::KeyframeBackward => decoder.seek_ms_keyframe(t),
+                        SeekMode::KeyframeForward => decoder.seek_ms_keyframe_forward(t),
                     };
                     ended_thread.store(false, Ordering::Relaxed);
                     eof = false;

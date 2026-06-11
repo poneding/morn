@@ -24,3 +24,11 @@ ffmpeg -y \
   -c:v libx264 -pix_fmt yuv420p -c:a aac \
   "$DIR/sample_short_audio.mp4"
 echo "生成: $DIR/sample_short_audio.mp4"
+
+# 双关键帧(0s/1s), 2 秒: 验证关键帧吸附 seek 的方向性(快进只向前吸附, 不回退)。
+ffmpeg -y \
+  -f lavfi -i "color=c=purple:s=160x120:r=25:d=2" \
+  -force_key_frames "0,1" \
+  -c:v libx264 -pix_fmt yuv420p \
+  "$DIR/sample_gop.mp4"
+echo "生成: $DIR/sample_gop.mp4"

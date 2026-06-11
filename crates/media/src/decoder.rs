@@ -144,7 +144,7 @@ impl VideoDecoder {
         Ok(())
     }
 
-    /// 关键帧吸附 seek(UI 快进/快退用): 跳到 ≤ms 的关键帧并从那里直接出帧,
+    /// 关键帧吸附 seek(UI 快退用): 跳到 ≤ms 的关键帧并从那里直接出帧,
     /// 不做解码追赶——首帧几乎零延迟, 由调用方把时钟对齐到首帧 PTS 实现"秒播"。
     pub fn seek_ms_keyframe(&mut self, ms: u64) -> Result<(), MediaError> {
         let ts = ms as i64 * 1000; // Input::seek 用 AV_TIME_BASE 微秒
@@ -153,6 +153,19 @@ impl VideoDecoder {
         self.eof = false;
         self.skip_until_ms = None;
         Ok(())
+    }
+
+    /// 关键帧吸附 seek(UI 快进用): 跳到 ≥ms 的首个关键帧——快进绝不回退。
+    /// 目标之后已无关键帧(接近结尾)时回退为"关键帧+精确追赶"(首帧 ≥ 目标)。
+    pub fn seek_ms_keyframe_forward(&mut self, ms: u64) -> Result<(), MediaError> {
+        let ts = ms as i64 * 1000;
+        if self.ictx.seek(ts, ts..).is_ok() {
+            self.decoder.flush();
+            self.eof = false;
+            self.skip_until_ms = None;
+            return Ok(());
+        }
+        self.seek_ms(ms)
     }
 
     /// 返回下一帧 RGBA, 文件结束返回 Ok(None)。

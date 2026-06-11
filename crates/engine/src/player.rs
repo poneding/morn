@@ -472,9 +472,15 @@ impl Player {
     }
 
     /// UI seek(进度条/方向键): 关键帧吸附——落点即出帧不追赶(秒播),
-    /// 放行时把时钟与音频对齐到落点帧 PTS。主流播放器的快进策略。
+    /// 放行时把时钟与音频对齐到落点帧 PTS。吸附带方向: 快进只向前吸附
+    /// (目标后的首关键帧, 无则精确追赶), 快退向后——快进绝不倒退。
     fn seek_to_fast(&mut self, ms: u64) {
-        self.seek_impl(ms, SeekMode::Keyframe);
+        let mode = if ms >= self.raw_position_ms() {
+            SeekMode::KeyframeForward
+        } else {
+            SeekMode::KeyframeBackward
+        };
+        self.seek_impl(ms, mode);
     }
 
     fn seek_impl(&mut self, ms: u64, mode: SeekMode) {
@@ -495,7 +501,7 @@ impl Player {
                     seq,
                     target_ms: target,
                 },
-                SeekMode::Keyframe => SeekGate::Keyframe {
+                SeekMode::KeyframeBackward | SeekMode::KeyframeForward => SeekGate::Keyframe {
                     seq,
                     fallback_target_ms: target,
                 },
@@ -1163,19 +1169,19 @@ mod tests {
     }
 
     #[test]
-    fn ui_seek_snaps_to_keyframe_for_instant_playback() {
-        // UI seek(进度条/方向键)走关键帧吸附: 落点帧到达即放行(不解码追赶, 秒播),
+    fn backward_ui_seek_snaps_to_previous_keyframe_for_instant_playback() {
+        // UI 快退走向后关键帧吸附: 落点帧到达即放行(不解码追赶, 秒播),
         // 时钟与音频对齐到落点帧 PTS。sample.mp4 只有 0ms 一个关键帧,
-        // 故 SeekTo(500) 放行后位置应回落到关键帧附近, 而不是停在 500。
+        // 从 ~400ms 退到 100ms 时落点应回到关键帧(0ms)附近。
         let path = fixture();
         assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
 
         let mut p = Player::new();
         p.handle(Command::Open(path));
-        // 预热: 播放推进一段, 确保解码/呈现管线在跑。
-        drive_until_position(&mut p, 100, std::time::Duration::from_secs(3));
+        // 预热: 播放推进到 400ms 之后再快退。
+        drive_until_position(&mut p, 400, std::time::Duration::from_secs(3));
 
-        p.handle(Command::SeekTo(500));
+        p.handle(Command::SeekTo(100));
         assert!(p.seek_pending(), "SeekTo 后闸门应挂起");
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -1187,12 +1193,41 @@ mod tests {
         let pos = p.timeline().position_ms;
         assert!(
             pos <= 150,
-            "吸附放行后位置应对齐到关键帧(0ms)附近, 实际 {pos}ms"
+            "快退吸附放行后位置应对齐到关键帧(0ms)附近, 实际 {pos}ms"
         );
 
         // 吸附起播后继续推进(音频/墙钟驱动)。
         let pos = drive_until_position(&mut p, 300, std::time::Duration::from_secs(3));
         assert!(pos >= 300, "吸附起播后应继续推进, 实际 {pos}ms");
+        p.handle(Command::Stop);
+    }
+
+    #[test]
+    fn forward_ui_seek_never_moves_backward() {
+        // 快进吸附必须向前: 落到目标之后的首个关键帧(sample_gop.mp4 关键帧
+        // 0s/1s, 从 ~150ms 快进到 900 → 落点 1000ms); 绝不能落回目标之前的
+        // 关键帧——否则长 GOP 文件按"+10s"画面反而倒退。
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../media/tests/fixtures/sample_gop.mp4");
+        assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
+
+        let mut p = Player::new();
+        p.handle(Command::Open(path));
+        drive_until_position(&mut p, 150, std::time::Duration::from_secs(3));
+
+        p.handle(Command::SeekTo(900));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while p.seek_pending() && std::time::Instant::now() < deadline {
+            p.present_frame();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!p.seek_pending(), "闸门应放行");
+        let pos = p.timeline().position_ms;
+        assert!(pos >= 900, "快进后位置不得回退(目标 900), 实际 {pos}ms");
+        assert!(
+            pos <= 1200,
+            "快进应吸附到下一关键帧(1000ms)附近, 实际 {pos}ms"
+        );
         p.handle(Command::Stop);
     }
 
