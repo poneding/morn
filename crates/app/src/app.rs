@@ -1180,7 +1180,7 @@ impl eframe::App for PlayerApp {
         let mut video_commands = Vec::new();
         egui::CentralPanel::no_frame().show_inside(ui, |ui| {
             ui.set_min_width(VIDEO_MIN_WIDTH);
-            video_commands = self.video_view.show(ui, frame, &self.player);
+            video_commands = self.video_view.show(ui, frame, &mut self.player);
         });
         for cmd in video_commands {
             self.handle_command(cmd);
@@ -1546,24 +1546,27 @@ impl eframe::App for PlayerApp {
             self.playlist_auto_hidden = true;
         }
         if screenshot_requested {
-            if let Some((rgba, w, h)) = self.video_view.last_frame() {
-                let screenshot_dir = self.player.screenshot_dir();
-                match crate::enhance::save_screenshot(rgba, w, h, &screenshot_dir) {
-                    Ok(p) => {
-                        eprintln!("截图已保存: {}", p.display());
-                        self.set_screenshot_notice(format!(
-                            "{}: {}",
-                            t!("screenshot_saved"),
-                            p.display()
-                        ));
-                    }
-                    Err(e) => {
-                        eprintln!("截图失败: {e}");
-                        self.set_screenshot_notice(format!("{}: {e}", t!("screenshot_failed")));
-                    }
+            let screenshot_dir = self.player.screenshot_dir();
+            let shot = self
+                .player
+                .current_frame_rgba()
+                .map(|(rgba, w, h)| crate::enhance::save_screenshot(rgba, w, h, &screenshot_dir));
+            match shot {
+                Some(Ok(p)) => {
+                    eprintln!("截图已保存: {}", p.display());
+                    self.set_screenshot_notice(format!(
+                        "{}: {}",
+                        t!("screenshot_saved"),
+                        p.display()
+                    ));
                 }
-            } else {
-                self.set_screenshot_notice(t!("screenshot_no_frame").to_string());
+                Some(Err(e)) => {
+                    eprintln!("截图失败: {e}");
+                    self.set_screenshot_notice(format!("{}: {e}", t!("screenshot_failed")));
+                }
+                None => {
+                    self.set_screenshot_notice(t!("screenshot_no_frame").to_string());
+                }
             }
         }
 
@@ -1596,10 +1599,10 @@ impl eframe::App for PlayerApp {
         {
             ctx.request_repaint_after(delay);
         }
-        if !interacting
-            && self.player.timeline().state == player_core::PlaybackState::Playing
-            && self.player.video().is_some_and(|v| v.take_frame_pending())
-        {
+        // 播放态连续重绘(贴显示器刷新): 引擎按主时钟选帧呈现, 不再依赖 frame_pending 原子标志
+        // 唤醒——根治"播几秒卡一下"。拖窗口/滑块(interacting)时让出, 避免与 OS resize 争抢合成带宽;
+        // 暂停/停止时不请求, 画面自然静止。
+        if !interacting && self.player.timeline().state == player_core::PlaybackState::Playing {
             ctx.request_repaint();
         }
     }
@@ -2361,7 +2364,9 @@ mod tests {
         assert!(source.contains("should_request_continuous_repaint"));
         assert!(source.contains("self.shortcut_notice.is_some()"));
         assert!(source.contains("i.pointer.any_down()"));
-        assert!(source.contains("take_frame_pending"));
+        // 播放态连续重绘(取代旧的 frame_pending 唤醒)。
+        assert!(source.contains("ctx.request_repaint()"));
+        assert!(!source.contains("take_frame_pending"));
     }
 
     #[test]

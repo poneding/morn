@@ -1,5 +1,7 @@
 use crate::decode_thread::DecodeThread;
+use crate::play_clock::PlayClock;
 use crate::timeline::Timeline;
+use crate::wall_clock::WallClock;
 use audio::{AudioHandle, AudioOutput};
 use media::AudioDecoder;
 use player_core::{Command, Playlist, StateMachine};
@@ -8,6 +10,52 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+
+/// 视频帧相对主时钟的容差(毫秒): PTS 落在 [master-TOL, master+TOL] 内即显示。
+const PRESENT_TOL_MS: u64 = 15;
+/// 单次 present 的丢帧上限: 巨量迟帧时达此上限即强制显示, 避免长时间无画面。
+const MAX_DROP_PER_PRESENT: u32 = 8;
+
+/// 诊断探针: 环境变量 MORN_DEBUG 置位时, present 每秒打印一行关键指标到 stderr。
+/// 用来定位"卡顿/不同步"到底卡在哪一环(解码吞吐 / 队列饥饿 / 时钟停滞 / 同步漂移)。
+struct DebugProbe {
+    enabled: bool,
+    t: std::time::Instant,
+    calls: u64,
+    last_calls: u64,
+    shown: u64,
+    last_shown: u64,
+    last_drops: u32,
+    last_clock_ms: u64,
+    last_decoded: u64,
+    // 细粒度: 主时钟"台阶"(每次 present 读到的 clock 是否变了 + 最大单步跳变), 以及屏幕上单帧最长停留。
+    last_now_ms: u64,
+    clock_updates: u32,
+    max_jump_ms: u64,
+    last_shown_at: Option<std::time::Instant>,
+    max_shown_gap_ms: u64,
+}
+
+impl DebugProbe {
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var("MORN_DEBUG").is_ok(),
+            t: std::time::Instant::now(),
+            calls: 0,
+            last_calls: 0,
+            shown: 0,
+            last_shown: 0,
+            last_drops: 0,
+            last_clock_ms: 0,
+            last_decoded: 0,
+            last_now_ms: 0,
+            clock_updates: 0,
+            max_jump_ms: 0,
+            last_shown_at: None,
+            max_shown_gap_ms: 0,
+        }
+    }
+}
 
 pub struct Player {
     machine: StateMachine,
@@ -32,7 +80,13 @@ pub struct Player {
     prefs: persist::Preferences,
     prefs_path: std::path::PathBuf,
     playback_ended: bool,
-    fallback_position_ms: u64,
+    // 统一播放时钟: 有音轨=音频主时钟(真实样本驱动), 无音轨=墙钟。取代旧的静态 fallback 位置。
+    clock: PlayClock,
+    // 当前显示帧(跨重绘保留)与已取出但未到点的未来帧(pending)。选帧逻辑现在在引擎里。
+    current_frame: Option<media::VideoFrame>,
+    pending_frame: Option<media::VideoFrame>,
+    present_drops: u32,
+    dbg: DebugProbe,
 }
 
 impl Player {
@@ -58,7 +112,11 @@ impl Player {
             prefs: persist::Preferences::default(),
             prefs_path: std::path::PathBuf::new(),
             playback_ended: false,
-            fallback_position_ms: 0,
+            clock: PlayClock::Wall(WallClock::new()),
+            current_frame: None,
+            pending_frame: None,
+            present_drops: 0,
+            dbg: DebugProbe::new(),
         }
     }
 
@@ -137,10 +195,7 @@ impl Player {
     }
 
     fn raw_position_ms(&self) -> u64 {
-        self.audio_out
-            .as_ref()
-            .map(|a| a.clock.position_ms())
-            .unwrap_or(self.fallback_position_ms)
+        self.clock.position_ms()
     }
 
     pub fn timeline(&self) -> Timeline {
@@ -166,6 +221,133 @@ impl Player {
 
     pub fn current_video_dimensions(&self) -> Option<(u32, u32)> {
         self.video.as_ref().map(DecodeThread::dimensions)
+    }
+
+    /// 按主时钟推进选帧, 返回"本次需要新上传的帧"。None=画面不变(沿用上一帧纹理)。
+    /// 暂停时主时钟冻结, 未来帧被 Hold, 自然保持当前画面(不再每帧重传)。
+    pub fn present_frame(&mut self) -> Option<&media::VideoFrame> {
+        // 取帧用"平滑时钟"(回调间隙墙钟插值), 让 24fps@60Hz 的取帧节奏连续, 消除阶梯抖动。
+        let now = self.clock.position_ms_smooth();
+        self.dbg.calls += 1;
+        // 主时钟台阶: 统计这次 present 是否读到了变化的 clock 值及最大单步跳变。
+        if self.dbg.enabled && now != self.dbg.last_now_ms {
+            self.dbg.clock_updates += 1;
+            let jump = now.saturating_sub(self.dbg.last_now_ms);
+            if self.dbg.last_now_ms != 0 && jump > self.dbg.max_jump_ms {
+                self.dbg.max_jump_ms = jump;
+            }
+            self.dbg.last_now_ms = now;
+        }
+        let dt = self.video.as_ref()?;
+        let mut changed = false;
+        let mut drops = 0u32;
+        loop {
+            let vf = match self.pending_frame.take() {
+                Some(f) => f,
+                None => match dt.try_recv_frame() {
+                    Some(f) => f,
+                    None => break,
+                },
+            };
+            match sync::advance_action(now, vf.pts_ms, PRESENT_TOL_MS, drops, MAX_DROP_PER_PRESENT)
+            {
+                sync::AdvanceAction::Show => {
+                    self.current_frame = Some(vf);
+                    changed = true;
+                    self.dbg.shown += 1;
+                    // 屏幕上单帧停留时长(墙钟): 最大值反映可见的卡顿/迟滞。
+                    if self.dbg.enabled {
+                        let now_i = std::time::Instant::now();
+                        if let Some(prev) = self.dbg.last_shown_at {
+                            let gap = now_i.duration_since(prev).as_millis() as u64;
+                            if gap > self.dbg.max_shown_gap_ms {
+                                self.dbg.max_shown_gap_ms = gap;
+                            }
+                        }
+                        self.dbg.last_shown_at = Some(now_i);
+                    }
+                    break;
+                }
+                sync::AdvanceAction::DropAndContinue => {
+                    drops += 1;
+                    continue;
+                }
+                sync::AdvanceAction::HoldKeepCurrent => {
+                    self.pending_frame = Some(vf);
+                    break;
+                }
+            }
+        }
+        self.present_drops = self.present_drops.saturating_add(drops);
+        self.debug_log(now);
+        if changed {
+            self.current_frame.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// 诊断: MORN_DEBUG 置位时每秒打印一行关键指标, 定位卡顿/不同步的环节。
+    fn debug_log(&mut self, now_ms: u64) {
+        if !self.dbg.enabled {
+            return;
+        }
+        let elapsed = self.dbg.t.elapsed();
+        if elapsed < std::time::Duration::from_secs(1) {
+            return;
+        }
+        let secs = elapsed.as_secs_f64().max(0.001);
+        let decoded_now = self.video.as_ref().map(|v| v.decoded_total()).unwrap_or(0);
+        let q = self.video.as_ref().map(|v| v.queue_len()).unwrap_or(0);
+        let hw = self
+            .video
+            .as_ref()
+            .map(|v| v.is_hardware())
+            .unwrap_or(false);
+        let decode_fps = decoded_now.saturating_sub(self.dbg.last_decoded) as f64 / secs;
+        let calls_fps = self.dbg.calls.saturating_sub(self.dbg.last_calls) as f64 / secs;
+        let shown_fps = self.dbg.shown.saturating_sub(self.dbg.last_shown) as f64 / secs;
+        let drop_fps = self.present_drops.saturating_sub(self.dbg.last_drops) as f64 / secs;
+        // 媒体时间推进速率: rate=100 且音频跟得上时应 ≈1000ms/秒墙钟; 明显偏低=时钟停滞(音频欠载)。
+        let clock_adv = now_ms.saturating_sub(self.dbg.last_clock_ms) as f64 / secs;
+        let drift = now_ms as i64
+            - self
+                .current_frame
+                .as_ref()
+                .map(|f| f.pts_ms as i64)
+                .unwrap_or(now_ms as i64);
+        let src = if matches!(self.clock, PlayClock::Audio(_)) {
+            "audio"
+        } else {
+            "wall"
+        };
+        eprintln!(
+            "[morn] decode={decode_fps:.0}fps hw={hw} q={q} | present_calls={calls_fps:.0}/s shown={shown_fps:.0}fps drop={drop_fps:.0}/s | clock={now_ms}ms adv={clock_adv:.0}ms/s drift={drift}ms | clock_steps={clock_steps:.0}/s max_jump={max_jump}ms max_frame_gap={max_gap}ms src={src}",
+            clock_steps = self.dbg.clock_updates as f64 / secs,
+            max_jump = self.dbg.max_jump_ms,
+            max_gap = self.dbg.max_shown_gap_ms,
+        );
+        self.dbg.t = std::time::Instant::now();
+        self.dbg.last_decoded = decoded_now;
+        self.dbg.last_calls = self.dbg.calls;
+        self.dbg.last_shown = self.dbg.shown;
+        self.dbg.last_drops = self.present_drops;
+        self.dbg.last_clock_ms = now_ms;
+        self.dbg.clock_updates = 0;
+        self.dbg.max_jump_ms = 0;
+        self.dbg.max_shown_gap_ms = 0;
+    }
+
+    /// 当前显示帧的 RGBA (像素, 宽, 高), 供截图使用。
+    pub fn current_frame_rgba(&self) -> Option<(&[u8], u32, u32)> {
+        self.current_frame
+            .as_ref()
+            .map(|f| (f.rgba.as_slice(), f.width, f.height))
+    }
+
+    /// 累计丢帧数(供调试 HUD, CP4 用)。
+    pub fn present_drops(&self) -> u32 {
+        self.present_drops
     }
 
     pub fn playlist_paths(&self) -> &[std::path::PathBuf] {
@@ -232,19 +414,20 @@ impl Player {
         } else {
             ms
         };
-        self.fallback_position_ms = target;
         self.playback_ended = false;
         if let Some(v) = &self.video {
             v.request_seek(target);
-            // 排空已缓冲的旧帧(尤其向后 seek 时, 旧帧 PTS 在目标之后不会被 decide_frame 丢弃)
+            // 排空已缓冲的旧帧(尤其向后 seek 时, 旧帧 PTS 在目标之后不会被丢弃)。
             while v.try_recv_frame().is_some() {}
         }
+        // seek 丢弃当前/暂存帧, 让 present 从新位置重新选帧。
+        self.current_frame = None;
+        self.pending_frame = None;
         self.audio_seek.store(target, Ordering::Relaxed);
         // 丢弃环形缓冲里约 1s 的旧音频, 否则 seek 后旧声音还会续播一会儿。
         self.audio_flush.store(true, Ordering::Relaxed);
-        if let Some(a) = &self.audio_out {
-            a.clock.reset_to(target);
-        }
+        self.clock.reset_to(target);
+        // 注: CP1 不做 seek 闸门(暂停音频等视频追上); seek 精修留待 CP2 用统一 demuxer + serial。
     }
 
     fn pause_playback(&mut self) {
@@ -252,6 +435,7 @@ impl Player {
             if let Some(a) = &self.audio_out {
                 a.pause();
             }
+            self.clock.pause();
         }
     }
 
@@ -319,10 +503,11 @@ impl Player {
             self.playlist.current_index(),
         ) {
             EndPlaybackAction::PauseAtEnd => {
+                self.clock.reset_to(self.duration_ms);
                 if let Some(a) = &self.audio_out {
-                    a.clock.reset_to(self.duration_ms);
                     a.pause();
                 }
+                self.clock.pause();
                 let _ = self.machine.apply(player_core::Transition::Pause);
                 self.playback_ended = true;
             }
@@ -331,6 +516,7 @@ impl Player {
                 if let Some(a) = &self.audio_out {
                     a.resume();
                 }
+                self.clock.resume();
             }
             EndPlaybackAction::OpenPlaylistIndex(index) => {
                 self.playlist.set_cursor(index);
@@ -366,6 +552,7 @@ impl Player {
                     if let Some(a) = &self.audio_out {
                         a.resume();
                     }
+                    self.clock.resume();
                 }
             }
             Command::Pause => {
@@ -397,8 +584,8 @@ impl Player {
                 let pct = clamp_rate_pct(pct);
                 self.rate_pct = pct;
                 self.rate_shared.store(pct as u32, Ordering::Relaxed);
-                if let Some(a) = &self.audio_out {
-                    a.clock.set_rate(pct);
+                self.clock.set_rate(pct);
+                if self.audio_out.is_some() {
                     self.audio_flush.store(true, Ordering::Relaxed);
                 }
             }
@@ -479,7 +666,6 @@ impl Player {
     fn open(&mut self, path: &Path) {
         self.teardown();
         self.playback_ended = false;
-        self.fallback_position_ms = 0;
 
         let video = match DecodeThread::spawn(path, 16) {
             Ok(v) => v,
@@ -494,6 +680,8 @@ impl Player {
                 out.clock.set_rate(self.rate_pct);
                 let output_rate = out.sample_rate;
                 let (handle, mut producer) = out.split();
+                // 有音轨: 用音频主时钟(真实样本驱动)作为播放时钟。
+                self.clock = PlayClock::Audio(handle.clock.clone());
                 self.duration_ms = probe_duration_ms(path).unwrap_or(0);
                 let apath = path.to_path_buf();
                 let stop = Arc::new(AtomicBool::new(false));
@@ -501,7 +689,7 @@ impl Player {
                 let seek_t = self.audio_seek.clone();
                 let rate_t = self.rate_shared.clone();
                 let join = std::thread::spawn(move || {
-                    let mut adec = match AudioDecoder::open(&apath) {
+                    let mut adec = match AudioDecoder::open_with_rate(&apath, output_rate) {
                         Ok(d) => d,
                         Err(_) => return,
                     };
@@ -562,6 +750,9 @@ impl Player {
             Err(e) => {
                 eprintln!("启动音频失败: {e}, 仅播放视频(静音)");
                 self.duration_ms = probe_duration_ms(path).unwrap_or(0);
+                // 无音轨: 用墙钟驱动走时(否则纯视频不前进)。
+                self.clock = PlayClock::Wall(WallClock::new());
+                self.clock.set_rate(self.rate_pct);
             }
         }
 
@@ -592,7 +783,10 @@ impl Player {
             v.stop();
         }
         self.duration_ms = 0;
-        self.fallback_position_ms = 0;
+        self.clock = PlayClock::Wall(WallClock::new());
+        self.current_frame = None;
+        self.pending_frame = None;
+        self.present_drops = 0;
         self.audio_stop = Arc::new(AtomicBool::new(false));
         self.audio_seek = Arc::new(AtomicU64::new(u64::MAX));
         self.audio_flush = Arc::new(AtomicBool::new(false));

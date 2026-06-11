@@ -1,7 +1,16 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
+
+/// 平滑插值上限(毫秒): 两次音频回调之间用墙钟插值, 但最多补这么多。
+/// 防止音频长时间停顿(欠载/暂停)时, 插值让时钟无限跑飞。
+pub(crate) const MAX_INTERP_MS: u64 = 50;
 
 /// 音频主时钟。回调线程累加已消费帧数, 任意线程读取播放位置。
+///
+/// `position_ms` 是"阶梯"位置(只随音频回调跳变, 确定性, 供 seekbar/seek 锚定/测试);
+/// `position_ms_smooth` 在回调间隙额外用墙钟插值, 让视频 present 看到连续推进的时钟,
+/// 消除"按音频回调跳变"导致的取帧节奏抖动(24fps@60Hz 的不规则 judder)。
 #[derive(Clone)]
 pub struct MasterClock {
     frames_played: Arc<AtomicU64>,
@@ -9,6 +18,9 @@ pub struct MasterClock {
     anchor_ms: Arc<AtomicU64>,
     sample_rate: u32,
     rate: Arc<AtomicU32>,
+    // baseline 是 Copy: clone 后各副本共享同一时间基准。last_update 记录上次走时更新相对 baseline 的纳秒。
+    baseline: Instant,
+    last_update_nanos: Arc<AtomicU64>,
 }
 
 impl MasterClock {
@@ -19,15 +31,24 @@ impl MasterClock {
             anchor_ms: Arc::new(AtomicU64::new(0)),
             sample_rate: sample_rate.max(1),
             rate: Arc::new(AtomicU32::new(100)),
+            baseline: Instant::now(),
+            last_update_nanos: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// 记录"刚刚更新过走时"的墙钟时刻; position_ms_smooth 据此插值。
+    fn mark_updated(&self) {
+        let ns = self.baseline.elapsed().as_nanos() as u64;
+        self.last_update_nanos.store(ns, Ordering::Relaxed);
     }
 
     /// 音频回调消费了 `n` 个音频帧(每帧含所有声道一份样本)后调用。
     pub fn add_frames(&self, n: u64) {
         self.frames_played.fetch_add(n, Ordering::Relaxed);
+        self.mark_updated();
     }
 
-    /// 当前播放位置(毫秒)。
+    /// 当前播放位置(毫秒, 阶梯值: 只随音频回调跳变)。
     pub fn position_ms(&self) -> u64 {
         let frames = self.frames_played.load(Ordering::Relaxed);
         let anchor_frames = self.anchor_frames.load(Ordering::Relaxed);
@@ -37,6 +58,16 @@ impl MasterClock {
         anchor_ms + elapsed_ms * self.rate.load(Ordering::Relaxed) as u64 / 100
     }
 
+    /// 平滑播放位置: 阶梯位置 + 自上次更新以来的墙钟插值(上限 MAX_INTERP_MS)。供视频 present 取帧。
+    pub fn position_ms_smooth(&self) -> u64 {
+        let stepped = self.position_ms();
+        let now_ns = self.baseline.elapsed().as_nanos() as u64;
+        let last_ns = self.last_update_nanos.load(Ordering::Relaxed);
+        let since_ms = now_ns.saturating_sub(last_ns) / 1_000_000;
+        let interp = since_ms.min(MAX_INTERP_MS) * self.rate.load(Ordering::Relaxed) as u64 / 100;
+        stepped + interp
+    }
+
     /// 设置倍速百分比 (100 = 1.0x)。保留当前媒体位置, 只影响后续走时。
     pub fn set_rate(&self, pct: u16) {
         let pos = self.position_ms();
@@ -44,6 +75,7 @@ impl MasterClock {
         self.anchor_ms.store(pos, Ordering::Relaxed);
         self.anchor_frames.store(frames, Ordering::Relaxed);
         self.rate.store(pct.max(1) as u32, Ordering::Relaxed);
+        self.mark_updated();
     }
 
     /// seek 后重置时钟基准。
@@ -51,6 +83,7 @@ impl MasterClock {
         let frames = self.frames_played.load(Ordering::Relaxed);
         self.anchor_ms.store(ms, Ordering::Relaxed);
         self.anchor_frames.store(frames, Ordering::Relaxed);
+        self.mark_updated();
     }
 }
 
@@ -120,5 +153,31 @@ mod tests {
         assert_eq!(c.position_ms(), 10_000);
         c.add_frames(500);
         assert_eq!(c.position_ms(), 11_000);
+    }
+
+    #[test]
+    fn underrun_does_not_advance_clock() {
+        // 回调欠载时应 add_frames(0) → 位置不前进(防止视频追逐空转的时钟)。
+        let c = MasterClock::new(48_000);
+        c.add_frames(48_000); // 1s 真实音频
+        assert_eq!(c.position_ms(), 1000);
+        c.add_frames(0); // 一次欠载回调: 不前进
+        assert_eq!(c.position_ms(), 1000);
+    }
+
+    #[test]
+    fn smoothed_position_interpolates_between_updates_capped() {
+        // 平滑时钟: 两次音频回调之间用墙钟插值, 让 present 看到连续推进的时钟(消除 24fps@60Hz 节奏抖动)。
+        let c = MasterClock::new(1000);
+        c.add_frames(1000); // 阶梯位置 = 1000ms
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let s = c.position_ms_smooth();
+        assert!(
+            (1000..=1000 + super::MAX_INTERP_MS).contains(&s),
+            "平滑位置 {s} 应在 [1000, {}] 内(约 1000+20ms 插值, 受上限约束)",
+            1000 + super::MAX_INTERP_MS
+        );
+        // 阶梯位置不受插值影响, 保持确定性(供 seekbar/seek 锚定/测试)。
+        assert_eq!(c.position_ms(), 1000);
     }
 }

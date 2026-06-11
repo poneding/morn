@@ -20,6 +20,16 @@ pub struct AudioDecoder {
 
 impl AudioDecoder {
     pub fn open(path: &Path) -> Result<Self, MediaError> {
+        Self::open_inner(path, None)
+    }
+
+    /// 打开音频并把样本重采样到指定输出采样率(通常是音频设备采样率)。
+    /// 这样 1.0x 播放时无需再经时间拉伸器重采样, 可直接透传, 避免其固有延迟造成音画不同步。
+    pub fn open_with_rate(path: &Path, output_rate: u32) -> Result<Self, MediaError> {
+        Self::open_inner(path, Some(output_rate))
+    }
+
+    fn open_inner(path: &Path, output_rate: Option<u32>) -> Result<Self, MediaError> {
         ff::init()?;
         let ictx = ff::format::input(&path)?;
         let stream = ictx
@@ -31,12 +41,13 @@ impl AudioDecoder {
         let ctx = ff::codec::context::Context::from_parameters(stream.parameters())?;
         let decoder = ctx.decoder().audio()?;
 
-        let out_rate = decoder.rate();
+        let src_rate = decoder.rate();
+        let out_rate = output_rate.unwrap_or(src_rate).max(1);
         let out_layout = ChannelLayout::STEREO;
         let resampler = ff::software::resampling::Context::get(
             decoder.format(),
             decoder.channel_layout(),
-            decoder.rate(),
+            src_rate,
             Sample::F32(SampleType::Packed),
             out_layout,
             out_rate,

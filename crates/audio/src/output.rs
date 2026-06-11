@@ -50,6 +50,12 @@ impl PlaybackRateConverter {
             return Vec::new();
         }
 
+        // 1.0x 且采样率一致: 原样透传, 不进时间拉伸器。拉伸器有固有处理延迟(首块输出近乎静音),
+        // 而主时钟按"输出样本数"线性推算媒体时间, 经它后音频会稳定滞后→画面超前。仅倍速≠1 时才需要它。
+        if self.rate_pct == 100 && self.source_rate == self.output_rate {
+            return samples[..input_frames * channels].to_vec();
+        }
+
         let output_frames =
             (input_frames as f64 / self.input_frames_per_output_frame()).round() as usize;
         let output_frames = output_frames.max(1);
@@ -108,12 +114,17 @@ impl AudioOutput {
                             while consumer.try_pop().is_some() {}
                         }
                         let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-                        let mut filled = 0u64;
+                        let mut real = 0u64;
                         for slot in data.iter_mut() {
-                            *slot = consumer.try_pop().unwrap_or(0.0) * g;
-                            filled += 1;
+                            match consumer.try_pop() {
+                                Some(s) => {
+                                    *slot = s * g;
+                                    real += 1;
+                                }
+                                None => *slot = 0.0, // 欠载补静音, 但不计入主时钟
+                            }
                         }
-                        clock_cb.add_frames(filled / ch);
+                        clock_cb.add_frames(real / ch);
                     },
                     err_fn,
                     None,
@@ -127,13 +138,17 @@ impl AudioOutput {
                             while consumer.try_pop().is_some() {}
                         }
                         let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-                        let mut filled = 0u64;
+                        let mut real = 0u64;
                         for slot in data.iter_mut() {
-                            let s = consumer.try_pop().unwrap_or(0.0) * g;
-                            *slot = u16::from_sample(s);
-                            filled += 1;
+                            match consumer.try_pop() {
+                                Some(s) => {
+                                    *slot = u16::from_sample(s * g);
+                                    real += 1;
+                                }
+                                None => *slot = u16::from_sample(0.0),
+                            }
                         }
-                        clock_cb.add_frames(filled / ch);
+                        clock_cb.add_frames(real / ch);
                     },
                     err_fn,
                     None,
@@ -147,13 +162,17 @@ impl AudioOutput {
                             while consumer.try_pop().is_some() {}
                         }
                         let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-                        let mut filled = 0u64;
+                        let mut real = 0u64;
                         for slot in data.iter_mut() {
-                            let s = consumer.try_pop().unwrap_or(0.0) * g;
-                            *slot = i16::from_sample(s);
-                            filled += 1;
+                            match consumer.try_pop() {
+                                Some(s) => {
+                                    *slot = i16::from_sample(s * g);
+                                    real += 1;
+                                }
+                                None => *slot = i16::from_sample(0.0),
+                            }
                         }
-                        clock_cb.add_frames(filled / ch);
+                        clock_cb.add_frames(real / ch);
                     },
                     err_fn,
                     None,
@@ -263,6 +282,16 @@ mod tests {
         c.set_rate(200);
         let out = c.convert(&[0.0, 1.0, 2.0, 3.0, 4.0]);
         assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn passthrough_at_normal_speed_returns_input_unchanged() {
+        // 1.0x 且采样率一致时必须原样透传, 不经 signalsmith 时间拉伸器 ——
+        // 否则拉伸器的固有延迟会让实际音频滞后于主时钟, 表现为画面稳定超前声音。
+        let mut c = PlaybackRateConverter::new(2, 48_000, 48_000);
+        let input = vec![0.1, -0.1, 0.2, -0.2, 0.3, -0.3];
+        let out = c.convert(&input);
+        assert_eq!(out, input);
     }
 
     #[test]
