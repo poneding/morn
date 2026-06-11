@@ -22,6 +22,8 @@ pub struct VideoDecoder {
     width: u32,
     height: u32,
     eof: bool,
+    // 精确 seek: seek 落点(关键帧)到目标之间的帧只解码不缩放/不下载, 不对外产出。
+    skip_until_ms: Option<u64>,
     is_hardware: bool,
     decoded_in_hardware: bool,
     _hw_device: Option<HwDeviceContext>,
@@ -104,6 +106,7 @@ impl VideoDecoder {
             width,
             height,
             eof: false,
+            skip_until_ms: None,
             is_hardware,
             decoded_in_hardware: false,
             _hw_device: hw_device,
@@ -128,12 +131,15 @@ impl VideoDecoder {
         self.height
     }
 
-    /// seek 到目标毫秒(跳到不晚于该时间的最近关键帧), 并清解码器内部缓冲。
+    /// 精确 seek 到目标毫秒: demuxer 跳到不晚于该时间的最近关键帧并清解码缓冲,
+    /// 关键帧→目标之间的帧将在 next_frame 内部解码后直接丢弃(不缩放, 硬解帧不下载),
+    /// 故 seek 后首个产出帧的 PTS ≥ 目标。
     pub fn seek_ms(&mut self, ms: u64) -> Result<(), MediaError> {
         let ts = ms as i64 * 1000; // Input::seek 用 AV_TIME_BASE 微秒
         self.ictx.seek(ts, ..ts)?;
         self.decoder.flush();
         self.eof = false;
+        self.skip_until_ms = Some(ms);
         Ok(())
     }
 
@@ -142,6 +148,15 @@ impl VideoDecoder {
         loop {
             let mut decoded = FfVideo::empty();
             if self.decoder.receive_frame(&mut decoded).is_ok() {
+                // 精确 seek 的追赶期: 目标前的帧只解码不产出, 跳过昂贵的下载/缩放/拷贝。
+                if let Some(target) = self.skip_until_ms {
+                    let pts = decoded.pts().unwrap_or(0);
+                    let pts_ms = (pts as f64 * self.time_base * 1000.0).max(0.0) as u64;
+                    if pts_ms < target {
+                        continue;
+                    }
+                    self.skip_until_ms = None;
+                }
                 let frame = if self.is_hardware && self.frame_is_hw(&decoded) {
                     self.decoded_in_hardware = true;
                     self.download_and_scale(&decoded)?
