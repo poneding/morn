@@ -15,11 +15,14 @@ pub enum FramePull {
     End,
 }
 
+/// 帧通道载荷: (发出时的 seek 代次 serial, 帧)。
+type SerialFrame = (u64, VideoFrame);
+
 pub struct DecodeThread {
     dimensions: (u32, u32),
     // 帧带 serial(发出时的 applied_seek_seq): 取帧侧只放行 serial == 当前请求代次的帧,
     // seek 前已发出/发送中的旧帧被静默丢弃(ffplay 的 serial flush 思路)。
-    rx: Receiver<(u64, VideoFrame)>,
+    rx: Receiver<SerialFrame>,
     seek_tx: Sender<u64>,
     stop: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
@@ -43,7 +46,7 @@ impl DecodeThread {
         let dimensions = (decoder.width(), decoder.height());
         drop(decoder);
         let owned_path = path.to_path_buf(); // VideoDecoder !Send, 移动路径而非解码器
-        let (tx, rx): (Sender<(u64, VideoFrame)>, Receiver<(u64, VideoFrame)>) = bounded(queue_cap);
+        let (tx, rx): (Sender<SerialFrame>, Receiver<SerialFrame>) = bounded(queue_cap);
         let (seek_tx, seek_rx) = crossbeam_channel::unbounded::<u64>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
