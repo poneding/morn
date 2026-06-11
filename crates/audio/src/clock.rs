@@ -6,6 +6,11 @@ use std::time::Instant;
 /// 防止音频长时间停顿(欠载/暂停)时, 插值让时钟无限跑飞。
 pub(crate) const MAX_INTERP_MS: u64 = 50;
 
+/// 停滞阈值(毫秒): 距上次真实走时超过该值视为停摆(欠载/seek 闸门/暂停流),
+/// 平滑位置回落到阶梯值, 不再外插——避免按"幽灵位置"提前出帧。
+/// 正常播放回调间隔约 10ms, 不会误触发。
+pub(crate) const SMOOTH_STALL_MS: u64 = 150;
+
 /// 音频主时钟。回调线程累加已消费帧数, 任意线程读取播放位置。
 ///
 /// `position_ms` 是"阶梯"位置(只随音频回调跳变, 确定性, 供 seekbar/seek 锚定/测试);
@@ -71,12 +76,16 @@ impl MasterClock {
         anchor_ms + elapsed_ms * self.rate.load(Ordering::Relaxed) as u64 / 100
     }
 
-    /// 平滑播放位置: 阶梯位置 + 自上次更新以来的墙钟插值(上限 MAX_INTERP_MS)。供视频 present 取帧。
+    /// 平滑播放位置: 阶梯位置 + 自上次更新以来的墙钟插值(上限 MAX_INTERP_MS)。
+    /// 停滞超过 SMOOTH_STALL_MS(欠载/seek 闸门/暂停流)则不再外插。供视频 present 取帧。
     pub fn position_ms_smooth(&self) -> u64 {
         let stepped = self.position_ms();
         let now_ns = self.baseline.elapsed().as_nanos() as u64;
         let last_ns = self.last_update_nanos.load(Ordering::Relaxed);
         let since_ms = now_ns.saturating_sub(last_ns) / 1_000_000;
+        if since_ms > SMOOTH_STALL_MS {
+            return stepped;
+        }
         let interp = since_ms.min(MAX_INTERP_MS) * self.rate.load(Ordering::Relaxed) as u64 / 100;
         stepped + interp
     }
@@ -213,5 +222,22 @@ mod tests {
         );
         // 阶梯位置不受插值影响, 保持确定性(供 seekbar/seek 锚定/测试)。
         assert_eq!(c.position_ms(), 1000);
+    }
+
+    #[test]
+    fn smoothed_position_stops_interpolating_when_stalled() {
+        // 时钟停滞(欠载/seek 闸门/暂停流)超过阈值后, 平滑位置必须回到阶梯值,
+        // 否则 present 会按一个超前 MAX_INTERP_MS 的"幽灵位置"提前出帧。
+        let c = MasterClock::new(1000);
+        c.add_frames(1000);
+        std::thread::sleep(std::time::Duration::from_millis(
+            super::SMOOTH_STALL_MS + 30,
+        ));
+        assert_eq!(
+            c.position_ms_smooth(),
+            1000,
+            "停滞超过 {}ms 后平滑位置不应再外插",
+            super::SMOOTH_STALL_MS
+        );
     }
 }
