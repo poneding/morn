@@ -1601,8 +1601,12 @@ impl eframe::App for PlayerApp {
         }
         // 播放态连续重绘(贴显示器刷新): 引擎按主时钟选帧呈现, 不再依赖 frame_pending 原子标志
         // 唤醒——根治"播几秒卡一下"。拖窗口/滑块(interacting)时让出, 避免与 OS resize 争抢合成带宽;
-        // 暂停/停止时不请求, 画面自然静止。
-        if !interacting && self.player.timeline().state == player_core::PlaybackState::Playing {
+        // 暂停/停止时不请求, 画面自然静止。seek 闸门挂起期间(含暂停态 seek)也保持重绘,
+        // 以驱动闸门放行检测并尽快显示目标帧。
+        if !interacting
+            && (self.player.timeline().state == player_core::PlaybackState::Playing
+                || self.player.seek_pending())
+        {
             ctx.request_repaint();
         }
     }

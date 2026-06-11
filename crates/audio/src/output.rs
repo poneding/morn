@@ -79,7 +79,13 @@ impl AudioOutput {
     ///
     /// `volume`(0..=100)在回调里按播放时刻施加增益(而非解码时), 故音量改动近乎即时生效。
     /// `flush` 置位时回调清空环形缓冲里的陈旧样本(seek 后丢弃旧音频), 由回调复位。
-    pub fn start(volume: Arc<AtomicU8>, flush: Arc<AtomicBool>) -> Result<Self, String> {
+    /// `gate` 置位期间回调只输出静音、不消费环形缓冲也不计时——seek 闸门用它冻结
+    /// 主时钟并让目标处样本先缓冲, 待视频解出目标帧后放行, 实现起播即同步。
+    pub fn start(
+        volume: Arc<AtomicU8>,
+        flush: Arc<AtomicBool>,
+        gate: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -113,6 +119,10 @@ impl AudioOutput {
                         if flush.swap(false, Ordering::Relaxed) {
                             while consumer.try_pop().is_some() {}
                         }
+                        if gate.load(Ordering::Relaxed) {
+                            data.fill(0.0);
+                            return; // 闸门期间: 静音、不消费、不计时(主时钟冻结)
+                        }
                         let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
                         let mut real = 0u64;
                         for slot in data.iter_mut() {
@@ -137,6 +147,10 @@ impl AudioOutput {
                         if flush.swap(false, Ordering::Relaxed) {
                             while consumer.try_pop().is_some() {}
                         }
+                        if gate.load(Ordering::Relaxed) {
+                            data.fill(u16::from_sample(0.0));
+                            return; // 闸门期间: 静音、不消费、不计时(主时钟冻结)
+                        }
                         let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
                         let mut real = 0u64;
                         for slot in data.iter_mut() {
@@ -160,6 +174,10 @@ impl AudioOutput {
                     move |data: &mut [i16], _| {
                         if flush.swap(false, Ordering::Relaxed) {
                             while consumer.try_pop().is_some() {}
+                        }
+                        if gate.load(Ordering::Relaxed) {
+                            data.fill(i16::from_sample(0.0));
+                            return; // 闸门期间: 静音、不消费、不计时(主时钟冻结)
                         }
                         let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
                         let mut real = 0u64;

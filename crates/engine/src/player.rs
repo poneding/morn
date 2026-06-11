@@ -29,6 +29,15 @@ enum PendingAnchor {
     Target(u64),
 }
 
+/// seek 闸门: seek 后冻结主时钟(音频经回调消费闸门, 墙钟经 pause),
+/// 直到视频解出"当前代次且 PTS ≥ 目标"的帧(或到流尾)才放行。
+/// 否则音频先就绪、时钟先跑, 视频边解边追 → seek 后持续丢帧/跳跃。
+struct SeekGate {
+    /// request_seek 返回的代次号, 用 applied_seek_seq 判断 seek 已实际生效。
+    seq: u64,
+    target_ms: u64,
+}
+
 /// 诊断探针: 环境变量 MORN_DEBUG 置位时, present 每秒打印一行关键指标到 stderr。
 /// 用来定位"卡顿/不同步"到底卡在哪一环(解码吞吐 / 队列饥饿 / 时钟停滞 / 同步漂移)。
 struct DebugProbe {
@@ -91,6 +100,9 @@ pub struct Player {
     // 音频线程上报"音频已结束/缺失"(打开失败或解码到 EOF; seek 后复位)。
     // 引擎据此把主时钟无缝切到墙钟, 避免位置冻结(纯视频文件/音频先于视频结束)。
     audio_ended: Arc<AtomicBool>,
+    // seek 闸门: 置位期间音频回调只出静音、不消费不计时(主时钟冻结)。
+    audio_gate: Arc<AtomicBool>,
+    seek_gate: Option<SeekGate>,
     subtitles: Option<subtitle::Subtitles>,
     sub_tracks: Vec<media::SubtitleTrack>,
     prefs: persist::Preferences,
@@ -124,6 +136,8 @@ impl Player {
             audio_seek: Arc::new(AtomicU64::new(u64::MAX)),
             audio_flush: Arc::new(AtomicBool::new(false)),
             audio_ended: Arc::new(AtomicBool::new(false)),
+            audio_gate: Arc::new(AtomicBool::new(false)),
+            seek_gate: None,
             subtitles: None,
             sub_tracks: Vec::new(),
             prefs: persist::Preferences::default(),
@@ -256,7 +270,8 @@ impl Player {
         let mut wc = WallClock::new();
         wc.reset_to_at(mc.position_ms(), now);
         wc.set_rate_at(self.rate_pct.max(1), now);
-        if self.machine.state() != player_core::PlaybackState::Playing {
+        // 非播放态或 seek 闸门挂起时, 新墙钟保持冻结(放行/恢复播放时再 resume)。
+        if self.machine.state() != player_core::PlaybackState::Playing || self.seek_gate.is_some() {
             wc.pause_at(now);
         }
         self.clock = PlayClock::Wall(wc);
@@ -265,6 +280,7 @@ impl Player {
     /// 按主时钟推进选帧, 返回"本次需要新上传的帧"。None=画面不变(沿用上一帧纹理)。
     /// 暂停时主时钟冻结, 未来帧被 Hold, 自然保持当前画面(不再每帧重传)。
     pub fn present_frame(&mut self) -> Option<&media::VideoFrame> {
+        self.maybe_release_seek_gate();
         self.maybe_handover_to_wall();
         // 取帧用"平滑时钟"(回调间隙墙钟插值), 让 24fps@60Hz 的取帧节奏连续, 消除阶梯抖动。
         let now = self.clock.position_ms_smooth();
@@ -455,9 +471,11 @@ impl Player {
             ms
         };
         self.playback_ended = false;
+        let mut gate_seq = None;
         if let Some(v) = &self.video {
-            v.request_seek(target);
-            // 排空已缓冲的旧帧(尤其向后 seek 时, 旧帧 PTS 在目标之后不会被丢弃)。
+            gate_seq = Some(v.request_seek(target));
+            // 排空已缓冲的旧帧, 尽快解除解码线程的发送阻塞让它看到 seek;
+            // 竞态溜进来的旧帧由 serial 过滤兜底。
             while v.try_recv_frame().is_some() {}
         }
         // seek 丢弃当前/暂存帧, 让 present 从新位置重新选帧。
@@ -478,7 +496,45 @@ impl Player {
             }
         }
         self.clock.reset_to(target);
-        // 注: CP1 不做 seek 闸门(暂停音频等视频追上); seek 精修留待 CP2 用统一 demuxer + serial。
+        // 挂起 seek 闸门: 冻结主时钟(音频钟经回调消费闸门, 墙钟经 pause),
+        // 待视频解出目标帧后在 present/tick 里放行——画面与声音从目标处同步起步。
+        self.seek_gate = gate_seq.map(|seq| SeekGate {
+            seq,
+            target_ms: target,
+        });
+        self.audio_gate
+            .store(self.seek_gate.is_some(), Ordering::Relaxed);
+        if self.seek_gate.is_some() {
+            self.clock.pause();
+        }
+    }
+
+    /// seek 闸门是否仍在等待视频解出目标帧(app 在挂起期间保持重绘以驱动放行)。
+    pub fn seek_pending(&self) -> bool {
+        self.seek_gate.is_some()
+    }
+
+    /// 视频已解出"当前代次且 PTS ≥ 目标"的帧(或到流尾)时放行 seek 闸门。
+    fn maybe_release_seek_gate(&mut self) {
+        let Some(g) = &self.seek_gate else {
+            return;
+        };
+        let ready = match &self.video {
+            Some(v) => {
+                v.applied_seek_seq() >= g.seq
+                    && (v.last_decoded_pts_ms() + PRESENT_TOL_MS >= g.target_ms || v.is_ended())
+            }
+            // 视频解码线程已不在(异常路径): 没有可等的帧, 直接放行。
+            None => true,
+        };
+        if !ready {
+            return;
+        }
+        self.seek_gate = None;
+        self.audio_gate.store(false, Ordering::Relaxed);
+        if self.machine.state() == player_core::PlaybackState::Playing {
+            self.clock.resume();
+        }
     }
 
     fn pause_playback(&mut self) {
@@ -541,6 +597,7 @@ impl Player {
     }
 
     pub fn tick(&mut self) {
+        self.maybe_release_seek_gate();
         self.maybe_handover_to_wall();
         if self.machine.state() != player_core::PlaybackState::Playing || self.duration_ms == 0 {
             return;
@@ -604,7 +661,10 @@ impl Player {
                     if let Some(a) = &self.audio_out {
                         a.resume();
                     }
-                    self.clock.resume();
+                    // seek 闸门挂起时不恢复时钟: 等视频解出目标帧由放行逻辑统一恢复。
+                    if self.seek_gate.is_none() {
+                        self.clock.resume();
+                    }
                 }
             }
             Command::Pause => {
@@ -727,7 +787,11 @@ impl Player {
             }
         };
 
-        match AudioOutput::start(self.volume_shared.clone(), self.audio_flush.clone()) {
+        match AudioOutput::start(
+            self.volume_shared.clone(),
+            self.audio_flush.clone(),
+            self.audio_gate.clone(),
+        ) {
             Ok(out) => {
                 out.clock.set_rate(self.rate_pct);
                 let output_rate = out.sample_rate;
@@ -901,6 +965,8 @@ impl Player {
         self.audio_seek = Arc::new(AtomicU64::new(u64::MAX));
         self.audio_flush = Arc::new(AtomicBool::new(false));
         self.audio_ended = Arc::new(AtomicBool::new(false));
+        self.audio_gate = Arc::new(AtomicBool::new(false));
+        self.seek_gate = None;
     }
 }
 
@@ -1033,6 +1099,39 @@ mod tests {
 
         let pos = drive_until_position(&mut p, 400, std::time::Duration::from_secs(3));
         assert!(pos >= 400, "纯视频文件位置应随墙钟前进, 实际停在 {pos}ms");
+        p.handle(Command::Stop);
+    }
+
+    #[test]
+    fn seek_gates_clock_until_target_frame_then_playback_continues() {
+        // seek 闸门: SeekTo 后时钟冻结在目标处, 直到视频解出目标帧才放行,
+        // 否则音频先就绪、时钟先跑, 视频边解边追 → 持续丢帧/跳跃的"卡顿"观感。
+        let path = fixture();
+        assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
+
+        let mut p = Player::new();
+        p.handle(Command::Open(path));
+        // 预热: 播放推进一段, 确保解码/呈现管线在跑。
+        drive_until_position(&mut p, 100, std::time::Duration::from_secs(3));
+
+        p.handle(Command::SeekTo(500));
+        assert!(p.seek_pending(), "SeekTo 后闸门应挂起");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while p.seek_pending() && std::time::Instant::now() < deadline {
+            p.present_frame();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!p.seek_pending(), "视频解出目标帧后闸门应放行");
+        let pos = p.timeline().position_ms;
+        assert!(
+            (480..=620).contains(&pos),
+            "放行时位置应仍在目标附近(时钟被闸住不追跑), 实际 {pos}ms"
+        );
+
+        // 放行后播放继续推进(音频/墙钟驱动)。
+        let pos = drive_until_position(&mut p, 700, std::time::Duration::from_secs(3));
+        assert!(pos >= 700, "放行后播放应继续推进, 实际 {pos}ms");
         p.handle(Command::Stop);
     }
 

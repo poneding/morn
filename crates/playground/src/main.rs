@@ -11,9 +11,10 @@ fn main() {
     let path = env::args().nth(1).expect("用法: playground <视频文件>");
     let path = std::path::PathBuf::from(path);
 
-    // 启动音频输出(playground 不调音量/不 seek: 满音量 + 永不置位的 flush)
+    // 启动音频输出(playground 不调音量/不 seek: 满音量 + 永不置位的 flush/gate)
     let mut out = AudioOutput::start(
         Arc::new(AtomicU8::new(100)),
+        Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicBool::new(false)),
     )
     .expect("启动音频失败");
