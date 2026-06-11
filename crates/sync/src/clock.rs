@@ -58,6 +58,45 @@ pub fn advance_action(
     }
 }
 
+/// seek 后对单个音频块的裁剪判定结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkGate {
+    /// 整块都在目标之前: 丢弃, 继续解下一块。
+    SkipAll,
+    /// 从本块开始播放: 先丢弃前 `trim_frames` 帧, 实际起播位置为 `anchor_ms`,
+    /// 主时钟应以 `anchor_ms` 锚定(= 实际播出的首个样本的媒体时间)。
+    PlayFrom { trim_frames: usize, anchor_ms: u64 },
+}
+
+/// seek 后音频块的裁剪判定: demuxer seek 通常落在目标之前的关键帧,
+/// 其后解出的块覆盖 [chunk_pts_ms, chunk_pts_ms + frame_count/sample_rate)。
+/// 目标之前的样本必须丢弃, 否则"时钟在目标、内容在关键帧"→ 永久音画偏移。
+pub fn gate_audio_chunk(
+    chunk_pts_ms: u64,
+    frame_count: usize,
+    sample_rate: u32,
+    target_ms: u64,
+) -> ChunkGate {
+    let rate = sample_rate.max(1) as u64;
+    let end_ms = chunk_pts_ms + frame_count as u64 * 1000 / rate;
+    if end_ms <= target_ms {
+        return ChunkGate::SkipAll;
+    }
+    if chunk_pts_ms >= target_ms {
+        return ChunkGate::PlayFrom {
+            trim_frames: 0,
+            anchor_ms: chunk_pts_ms,
+        };
+    }
+    let trim_frames = ((target_ms - chunk_pts_ms) * rate / 1000) as usize;
+    let trim_frames = trim_frames.min(frame_count);
+    let anchor_ms = chunk_pts_ms + trim_frames as u64 * 1000 / rate;
+    ChunkGate::PlayFrom {
+        trim_frames,
+        anchor_ms,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +166,55 @@ mod tests {
         );
         // 达到丢帧上限: 不再丢, 强制显示以尽快出画面。
         assert_eq!(advance_action(2000, 1000, TOL, 8, 8), AdvanceAction::Show);
+    }
+
+    // —— gate_audio_chunk: seek 后音频块的裁剪判定 ——
+    // demuxer seek 落在关键帧(常早于目标), 之后解出的音频块必须裁到目标,
+    // 且时钟按实际首个播放样本的 PTS 锚定, 否则每次 seek 都产生永久音画偏移。
+
+    #[test]
+    fn gate_skips_chunk_entirely_before_target() {
+        // 块覆盖 [1000, 1010), 目标 1500 → 整块丢弃。
+        assert_eq!(
+            gate_audio_chunk(1000, 480, 48_000, 1500),
+            ChunkGate::SkipAll
+        );
+        // 块尾恰好等于目标(区间右开)→ 仍整块丢弃。
+        assert_eq!(
+            gate_audio_chunk(1490, 480, 48_000, 1500),
+            ChunkGate::SkipAll
+        );
+    }
+
+    #[test]
+    fn gate_trims_chunk_straddling_target() {
+        // 块覆盖 [1000, 2000), 目标 1500 → 裁掉前 24000 帧, 从 1500 锚定。
+        assert_eq!(
+            gate_audio_chunk(1000, 48_000, 48_000, 1500),
+            ChunkGate::PlayFrom {
+                trim_frames: 24_000,
+                anchor_ms: 1500
+            }
+        );
+    }
+
+    #[test]
+    fn gate_keeps_chunk_at_or_after_target_and_anchors_to_its_pts() {
+        // 块起点已在目标之后(seek 落点晚于目标或目标处无音频)→ 不裁, 锚定到块 PTS。
+        assert_eq!(
+            gate_audio_chunk(1600, 480, 48_000, 1500),
+            ChunkGate::PlayFrom {
+                trim_frames: 0,
+                anchor_ms: 1600
+            }
+        );
+        // 块起点恰为目标 → 不裁。
+        assert_eq!(
+            gate_audio_chunk(1500, 480, 48_000, 1500),
+            ChunkGate::PlayFrom {
+                trim_frames: 0,
+                anchor_ms: 1500
+            }
+        );
     }
 }

@@ -19,6 +19,16 @@ const MAX_DROP_PER_PRESENT: u32 = 8;
 /// 留足余量: 正常播放回调间隔约 10ms, 不会误触发。
 const AUDIO_STALL_HANDOVER_MS: u64 = 200;
 
+/// 音频线程的时钟锚定请求: 在下一个可用块上把主时钟锚到实际播放内容的 PTS。
+/// 这是音画同步的关键——时钟必须反映"喇叭里真正在放的内容", 而不是请求的目标:
+/// demuxer seek 落在关键帧(早于目标), 不裁剪不锚定就会产生随机的永久偏移。
+enum PendingAnchor {
+    /// 锚到下一块的 PTS: 打开文件时容纳非零 start_time; 倍速切换冲掉缓冲后以内容为准。
+    FirstChunk,
+    /// seek 目标: 之前的块整块跳过, 跨目标的块裁剪后从目标处锚定。
+    Target(u64),
+}
+
 /// 诊断探针: 环境变量 MORN_DEBUG 置位时, present 每秒打印一行关键指标到 stderr。
 /// 用来定位"卡顿/不同步"到底卡在哪一环(解码吞吐 / 队列饥饿 / 时钟停滞 / 同步漂移)。
 struct DebugProbe {
@@ -731,6 +741,8 @@ impl Player {
                 let seek_t = self.audio_seek.clone();
                 let rate_t = self.rate_shared.clone();
                 let ended_t = self.audio_ended.clone();
+                let flush_t = self.audio_flush.clone();
+                let clock_t = handle.clock.clone();
                 let join = std::thread::spawn(move || {
                     let mut adec = match AudioDecoder::open_with_rate(&apath, output_rate) {
                         Ok(d) => d,
@@ -747,6 +759,7 @@ impl Player {
                     );
                     let mut current_rate = rate_t.load(Ordering::Relaxed).clamp(25, 400) as u16;
                     converter.set_rate(current_rate);
+                    let mut pending_anchor = Some(PendingAnchor::FirstChunk);
                     'outer: while !stop_t.load(Ordering::Relaxed) {
                         // 消费待处理 seek; swap 保证仅触发一次。
                         let st = seek_t.swap(u64::MAX, Ordering::Relaxed);
@@ -755,15 +768,58 @@ impl Player {
                             converter.reset();
                             // seek 回有音频的区域后重新供样本; EOF 状态由下面的解码结果再判。
                             ended_t.store(false, Ordering::Relaxed);
+                            pending_anchor = Some(PendingAnchor::Target(st));
                         }
                         let requested_rate = rate_t.load(Ordering::Relaxed).clamp(25, 400) as u16;
                         if requested_rate != current_rate {
                             current_rate = requested_rate;
                             converter.set_rate(current_rate);
+                            // 倍速切换冲掉了环形缓冲(≤1s 已转换样本): 内容跳到解码位置,
+                            // 重锚到下一块 PTS, 否则时钟与内容产生等于被丢缓冲时长的偏移。
+                            if pending_anchor.is_none() {
+                                pending_anchor = Some(PendingAnchor::FirstChunk);
+                            }
+                        }
+                        // 等回调完成环形缓冲清空(flush 由回调消费并复位)再推新样本,
+                        // 否则刚推入的目标样本会被一并清掉, 起播内容偏后于时钟锚点。
+                        if flush_t.load(Ordering::Relaxed) {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                            continue 'outer;
                         }
                         match adec.next_chunk() {
                             Ok(Some(chunk)) => {
-                                let buf = converter.convert(&chunk.samples);
+                                let ch = adec.channels().max(1) as usize;
+                                let mut start = 0usize;
+                                if let Some(pa) = pending_anchor.take() {
+                                    let frames = chunk.samples.len() / ch;
+                                    match pa {
+                                        PendingAnchor::FirstChunk => {
+                                            clock_t.reset_to(chunk.pts_ms);
+                                        }
+                                        PendingAnchor::Target(t) => {
+                                            match sync::gate_audio_chunk(
+                                                chunk.pts_ms,
+                                                frames,
+                                                output_rate,
+                                                t,
+                                            ) {
+                                                sync::ChunkGate::SkipAll => {
+                                                    // 整块在目标前: 丢弃, 锚定留给后续块。
+                                                    pending_anchor = Some(PendingAnchor::Target(t));
+                                                    continue 'outer;
+                                                }
+                                                sync::ChunkGate::PlayFrom {
+                                                    trim_frames,
+                                                    anchor_ms,
+                                                } => {
+                                                    start = trim_frames * ch;
+                                                    clock_t.reset_to(anchor_ms);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                let buf = converter.convert(&chunk.samples[start..]);
                                 let mut i = 0;
                                 while i < buf.len() {
                                     if stop_t.load(Ordering::Relaxed) {
