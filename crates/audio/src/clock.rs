@@ -43,9 +43,22 @@ impl MasterClock {
     }
 
     /// 音频回调消费了 `n` 个音频帧(每帧含所有声道一份样本)后调用。
+    /// 只有真实消费(n>0)才刷新走时标记: 欠载回调不算"在走时",
+    /// 否则停滞检测(墙钟接管)与回调间插值都会被空回调误导。
     pub fn add_frames(&self, n: u64) {
+        if n == 0 {
+            return;
+        }
         self.frames_played.fetch_add(n, Ordering::Relaxed);
         self.mark_updated();
+    }
+
+    /// 距上次真实走时更新(真实样本/重锚)的毫秒数。音频结束或缺失时持续增长,
+    /// 供引擎判定"音频钟已停摆, 该切墙钟接管"。
+    pub fn stalled_for_ms(&self) -> u64 {
+        let now_ns = self.baseline.elapsed().as_nanos() as u64;
+        let last_ns = self.last_update_nanos.load(Ordering::Relaxed);
+        now_ns.saturating_sub(last_ns) / 1_000_000
     }
 
     /// 当前播放位置(毫秒, 阶梯值: 只随音频回调跳变)。
@@ -163,6 +176,27 @@ mod tests {
         assert_eq!(c.position_ms(), 1000);
         c.add_frames(0); // 一次欠载回调: 不前进
         assert_eq!(c.position_ms(), 1000);
+    }
+
+    #[test]
+    fn stall_timer_ignores_underrun_callbacks() {
+        // 欠载回调(add_frames(0))不得刷新走时标记: 停滞时长用于判定
+        // "音频已结束/缺失 → 该交给墙钟接管", 被空回调刷新就永远判不出停滞。
+        let c = MasterClock::new(48_000);
+        c.add_frames(480);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        c.add_frames(0);
+        assert!(
+            c.stalled_for_ms() >= 25,
+            "欠载回调不应清零停滞计时, 实际 {}ms",
+            c.stalled_for_ms()
+        );
+        c.add_frames(480);
+        assert!(
+            c.stalled_for_ms() < 25,
+            "真实样本应刷新停滞计时, 实际 {}ms",
+            c.stalled_for_ms()
+        );
     }
 
     #[test]

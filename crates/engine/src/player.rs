@@ -15,6 +15,9 @@ use std::thread::JoinHandle;
 const PRESENT_TOL_MS: u64 = 15;
 /// 单次 present 的丢帧上限: 巨量迟帧时达此上限即强制显示, 避免长时间无画面。
 const MAX_DROP_PER_PRESENT: u32 = 8;
+/// 音频钟停摆超过此时长且音频线程已报结束/缺失 → 切墙钟接管走时。
+/// 留足余量: 正常播放回调间隔约 10ms, 不会误触发。
+const AUDIO_STALL_HANDOVER_MS: u64 = 200;
 
 /// 诊断探针: 环境变量 MORN_DEBUG 置位时, present 每秒打印一行关键指标到 stderr。
 /// 用来定位"卡顿/不同步"到底卡在哪一环(解码吞吐 / 队列饥饿 / 时钟停滞 / 同步漂移)。
@@ -75,6 +78,9 @@ pub struct Player {
     audio_seek: Arc<AtomicU64>,
     // 置位后音频回调清空环形缓冲里的陈旧样本(seek 后丢弃旧音频)。
     audio_flush: Arc<AtomicBool>,
+    // 音频线程上报"音频已结束/缺失"(打开失败或解码到 EOF; seek 后复位)。
+    // 引擎据此把主时钟无缝切到墙钟, 避免位置冻结(纯视频文件/音频先于视频结束)。
+    audio_ended: Arc<AtomicBool>,
     subtitles: Option<subtitle::Subtitles>,
     sub_tracks: Vec<media::SubtitleTrack>,
     prefs: persist::Preferences,
@@ -107,6 +113,7 @@ impl Player {
             audio_stop: Arc::new(AtomicBool::new(false)),
             audio_seek: Arc::new(AtomicU64::new(u64::MAX)),
             audio_flush: Arc::new(AtomicBool::new(false)),
+            audio_ended: Arc::new(AtomicBool::new(false)),
             subtitles: None,
             sub_tracks: Vec::new(),
             prefs: persist::Preferences::default(),
@@ -223,9 +230,32 @@ impl Player {
         self.video.as_ref().map(DecodeThread::dimensions)
     }
 
+    /// 音频结束/缺失且音频钟已停摆时, 把主时钟无缝切到墙钟(从当前位置、当前倍速续走)。
+    /// 覆盖两类场景: 纯视频文件(音频线程开流失败)与音频先于视频结束。
+    fn maybe_handover_to_wall(&mut self) {
+        if !self.audio_ended.load(Ordering::Relaxed) {
+            return;
+        }
+        let PlayClock::Audio(mc) = &self.clock else {
+            return;
+        };
+        if mc.stalled_for_ms() < AUDIO_STALL_HANDOVER_MS {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let mut wc = WallClock::new();
+        wc.reset_to_at(mc.position_ms(), now);
+        wc.set_rate_at(self.rate_pct.max(1), now);
+        if self.machine.state() != player_core::PlaybackState::Playing {
+            wc.pause_at(now);
+        }
+        self.clock = PlayClock::Wall(wc);
+    }
+
     /// 按主时钟推进选帧, 返回"本次需要新上传的帧"。None=画面不变(沿用上一帧纹理)。
     /// 暂停时主时钟冻结, 未来帧被 Hold, 自然保持当前画面(不再每帧重传)。
     pub fn present_frame(&mut self) -> Option<&media::VideoFrame> {
+        self.maybe_handover_to_wall();
         // 取帧用"平滑时钟"(回调间隙墙钟插值), 让 24fps@60Hz 的取帧节奏连续, 消除阶梯抖动。
         let now = self.clock.position_ms_smooth();
         self.dbg.calls += 1;
@@ -426,6 +456,17 @@ impl Player {
         self.audio_seek.store(target, Ordering::Relaxed);
         // 丢弃环形缓冲里约 1s 的旧音频, 否则 seek 后旧声音还会续播一会儿。
         self.audio_flush.store(true, Ordering::Relaxed);
+        // 若之前因音频 EOF 切到了墙钟, 且音频线程还活着(会在新位置重新供样本),
+        // 则切回音频主时钟; 目标仍在音频结束之后时, 线程会再次上报 EOF 重新接管。
+        if let Some(handle) = &self.audio_out {
+            if self.audio_join.as_ref().is_some_and(|j| !j.is_finished()) {
+                self.audio_ended.store(false, Ordering::Relaxed);
+                if matches!(self.clock, PlayClock::Wall(_)) {
+                    self.clock = PlayClock::Audio(handle.clock.clone());
+                    self.clock.set_rate(self.rate_pct);
+                }
+            }
+        }
         self.clock.reset_to(target);
         // 注: CP1 不做 seek 闸门(暂停音频等视频追上); seek 精修留待 CP2 用统一 demuxer + serial。
     }
@@ -490,6 +531,7 @@ impl Player {
     }
 
     pub fn tick(&mut self) {
+        self.maybe_handover_to_wall();
         if self.machine.state() != player_core::PlaybackState::Playing || self.duration_ms == 0 {
             return;
         }
@@ -688,10 +730,15 @@ impl Player {
                 let stop_t = stop.clone();
                 let seek_t = self.audio_seek.clone();
                 let rate_t = self.rate_shared.clone();
+                let ended_t = self.audio_ended.clone();
                 let join = std::thread::spawn(move || {
                     let mut adec = match AudioDecoder::open_with_rate(&apath, output_rate) {
                         Ok(d) => d,
-                        Err(_) => return,
+                        Err(_) => {
+                            // 无音频流(纯视频)或打开失败: 上报后退出, 引擎切墙钟走时。
+                            ended_t.store(true, Ordering::Relaxed);
+                            return;
+                        }
                     };
                     let mut converter = audio::PlaybackRateConverter::new(
                         adec.channels(),
@@ -706,6 +753,8 @@ impl Player {
                         if st != u64::MAX {
                             let _ = adec.seek_ms(st);
                             converter.reset();
+                            // seek 回有音频的区域后重新供样本; EOF 状态由下面的解码结果再判。
+                            ended_t.store(false, Ordering::Relaxed);
                         }
                         let requested_rate = rate_t.load(Ordering::Relaxed).clamp(25, 400) as u16;
                         if requested_rate != current_rate {
@@ -737,7 +786,12 @@ impl Player {
                                     }
                                 }
                             }
-                            Ok(None) | Err(_) => {
+                            Ok(None) => {
+                                // 音频 EOF: 上报给引擎切墙钟续走(音频先于视频结束的文件)。
+                                ended_t.store(true, Ordering::Relaxed);
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            Err(_) => {
                                 std::thread::sleep(std::time::Duration::from_millis(10));
                             }
                         }
@@ -790,6 +844,7 @@ impl Player {
         self.audio_stop = Arc::new(AtomicBool::new(false));
         self.audio_seek = Arc::new(AtomicU64::new(u64::MAX));
         self.audio_flush = Arc::new(AtomicBool::new(false));
+        self.audio_ended = Arc::new(AtomicBool::new(false));
     }
 }
 
@@ -889,6 +944,59 @@ mod tests {
 
     fn fixture() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../media/tests/fixtures/sample.mp4")
+    }
+
+    /// 驱动播放循环(模拟 app 的重绘): 反复 present_frame+tick 直到位置达到 target_ms 或超时。
+    /// 返回最终位置。
+    fn drive_until_position(p: &mut Player, target_ms: u64, timeout: std::time::Duration) -> u64 {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut pos = p.timeline().position_ms;
+        while std::time::Instant::now() < deadline {
+            p.present_frame();
+            p.tick();
+            pos = p.timeline().position_ms;
+            if pos >= target_ms {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        pos
+    }
+
+    #[test]
+    fn video_only_file_advances_position_while_playing() {
+        // 无音轨文件: 音频设备能打开但没有音频流, 播放位置必须由墙钟接管前进,
+        // 否则时钟挂在永不走时的音频钟上 → 画面永远冻在首帧。
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample_video_only.mp4");
+        assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
+
+        let mut p = Player::new();
+        p.handle(Command::Open(path));
+        assert_eq!(p.timeline().state, PlaybackState::Playing);
+
+        let pos = drive_until_position(&mut p, 400, std::time::Duration::from_secs(3));
+        assert!(pos >= 400, "纯视频文件位置应随墙钟前进, 实际停在 {pos}ms");
+        p.handle(Command::Stop);
+    }
+
+    #[test]
+    fn audio_eof_before_video_end_hands_over_to_wall_clock() {
+        // 音频(0.3s)先于视频(1s)结束: 音频 EOF 后主时钟必须切到墙钟继续走,
+        // 否则位置冻结在音频结束处 → 视频冻结且结束动作永不触发。
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample_short_audio.mp4");
+        assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
+
+        let mut p = Player::new();
+        p.handle(Command::Open(path));
+
+        let pos = drive_until_position(&mut p, 800, std::time::Duration::from_secs(5));
+        assert!(
+            pos >= 800,
+            "音频先结束后位置应由墙钟接管继续前进, 实际停在 {pos}ms"
+        );
+        p.handle(Command::Stop);
     }
 
     #[test]
