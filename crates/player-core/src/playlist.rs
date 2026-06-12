@@ -25,6 +25,38 @@ impl Playlist {
         self.items.push(path);
     }
 
+    /// 追加条目并把游标移动到新增条目；若条目已存在，则只移动游标到既有条目。
+    /// 返回最终选中的索引。用于“打开文件”时保留已有播放列表，同时切到新打开项。
+    pub fn append_or_select(&mut self, path: PathBuf) -> usize {
+        if let Some(index) = self.items.iter().position(|item| item == &path) {
+            self.cursor = index;
+            return index;
+        }
+
+        self.items.push(path);
+        self.cursor = self.items.len() - 1;
+        self.cursor
+    }
+
+    /// 批量追加条目，跳过已存在项，并把游标移动到本批第一个有效条目。
+    /// 若本批所有条目都已存在，则选中其中第一个既有条目。
+    pub fn append_or_select_many(&mut self, paths: Vec<PathBuf>) -> Option<usize> {
+        let mut selected = None;
+        for path in paths {
+            let index = if let Some(index) = self.items.iter().position(|item| item == &path) {
+                index
+            } else {
+                self.items.push(path);
+                self.items.len() - 1
+            };
+            selected.get_or_insert(index);
+        }
+        if let Some(index) = selected {
+            self.cursor = index;
+        }
+        selected
+    }
+
     pub fn current(&self) -> Option<&PathBuf> {
         self.items.get(self.cursor)
     }
@@ -131,6 +163,53 @@ mod tests {
         pl.add(p("/b.mp4"));
         assert_eq!(pl.current(), Some(&p("/a.mp4")));
         assert_eq!(pl.len(), 2);
+    }
+
+    #[test]
+    fn append_or_select_preserves_existing_items_and_moves_cursor() {
+        let mut pl = Playlist::new();
+        pl.set_items(vec![p("/a.mp4")], 0);
+
+        assert_eq!(pl.append_or_select(p("/b.mp4")), 1);
+        assert_eq!(
+            pl.iter().cloned().collect::<Vec<_>>(),
+            vec![p("/a.mp4"), p("/b.mp4")]
+        );
+        assert_eq!(pl.current_index(), Some(1));
+        assert_eq!(pl.current(), Some(&p("/b.mp4")));
+
+        assert_eq!(pl.append_or_select(p("/a.mp4")), 0);
+        assert_eq!(
+            pl.iter().cloned().collect::<Vec<_>>(),
+            vec![p("/a.mp4"), p("/b.mp4")]
+        );
+        assert_eq!(pl.current(), Some(&p("/a.mp4")));
+    }
+
+    #[test]
+    fn append_or_select_many_selects_first_requested_item() {
+        let mut pl = Playlist::new();
+        pl.set_items(vec![p("/a.mp4")], 0);
+
+        assert_eq!(
+            pl.append_or_select_many(vec![p("/b.mp4"), p("/c.mp4")]),
+            Some(1)
+        );
+        assert_eq!(
+            pl.iter().cloned().collect::<Vec<_>>(),
+            vec![p("/a.mp4"), p("/b.mp4"), p("/c.mp4")]
+        );
+        assert_eq!(pl.current(), Some(&p("/b.mp4")));
+
+        assert_eq!(
+            pl.append_or_select_many(vec![p("/c.mp4"), p("/a.mp4")]),
+            Some(2)
+        );
+        assert_eq!(
+            pl.iter().cloned().collect::<Vec<_>>(),
+            vec![p("/a.mp4"), p("/b.mp4"), p("/c.mp4")]
+        );
+        assert_eq!(pl.current(), Some(&p("/c.mp4")));
     }
 
     #[test]

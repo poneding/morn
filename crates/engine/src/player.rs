@@ -420,8 +420,10 @@ impl Player {
     pub fn open_folder(&mut self, dir: &Path) {
         let items = dir_videos(dir);
         if let Some(first) = items.first().cloned() {
+            self.save_state();
             self.playlist.set_items(items, 0);
             self.open(&first);
+            self.save_state();
         }
     }
 
@@ -432,8 +434,10 @@ impl Player {
         let items = dir_videos(dir);
         let index = items.iter().position(|item| item == path).unwrap_or(0);
         if let Some(selected) = items.get(index).cloned() {
+            self.save_state();
             self.playlist.set_items(items, index);
             self.open(&selected);
+            self.save_state();
         }
     }
 
@@ -694,9 +698,11 @@ impl Player {
                 }
             }
             EndPlaybackAction::OpenPlaylistIndex(index) => {
+                self.save_state();
                 self.playlist.set_cursor(index);
                 if let Some(path) = self.playlist.current().map(|p| p.to_path_buf()) {
                     self.open(&path);
+                    self.save_state();
                 }
             }
         }
@@ -705,17 +711,23 @@ impl Player {
     pub fn handle(&mut self, cmd: Command) {
         match cmd {
             Command::Open(path) => {
-                self.playlist.set_items(vec![path.clone()], 0);
+                self.save_state();
+                self.playlist.append_or_select(path.clone());
                 self.open(&path);
+                self.save_state();
             }
             Command::OpenFiles(paths) => {
                 let items: Vec<_> = paths
                     .into_iter()
                     .filter(|path| path.is_file() && is_video_ext(path))
                     .collect();
-                if let Some(first) = items.first().cloned() {
-                    self.playlist.set_items(items, 0);
-                    self.open(&first);
+                if !items.is_empty() {
+                    self.save_state();
+                    if let Some(index) = self.playlist.append_or_select_many(items) {
+                        let selected = self.playlist.as_slice()[index].clone();
+                        self.open(&selected);
+                        self.save_state();
+                    }
                 }
             }
             Command::Play => {
@@ -768,43 +780,59 @@ impl Player {
                 }
             }
             Command::Next => {
+                self.save_state();
                 if let Some(p) = self.playlist.next().map(|p| p.to_path_buf()) {
                     self.open(&p);
+                    self.save_state();
                 }
             }
             Command::Prev => {
+                self.save_state();
                 if let Some(p) = self.playlist.prev().map(|p| p.to_path_buf()) {
                     self.open(&p);
+                    self.save_state();
                 }
             }
             Command::PlayIndex(i) => {
+                self.save_state();
                 self.playlist.set_cursor(i);
                 if let Some(p) = self.playlist.current().map(|p| p.to_path_buf()) {
                     self.open(&p);
+                    self.save_state();
                 }
             }
             Command::RemovePlaylistIndex(i) => {
+                self.save_state();
                 self.remove_playlist_index(i);
+                self.save_state();
             }
             Command::ClearPlaylist => {
+                self.save_state();
                 self.playlist.clear();
                 self.stop_playback();
+                self.save_state();
             }
             Command::RemoveHistoryIndex(i) => {
                 player_core::remove_history_index(&mut self.prefs.history, i);
+                self.save_state();
             }
             Command::ClearHistory => {
                 player_core::clear_history(&mut self.prefs.history);
+                self.save_state();
             }
             Command::RevealFile(_) => {}
             Command::OpenSiblingVideos(path) => {
                 self.open_sibling_videos(&path);
             }
             Command::DeletePlaylistFileIndex(i) => {
+                self.save_state();
                 self.delete_playlist_file_index(i);
+                self.save_state();
             }
             Command::DeleteHistoryFileIndex(i) => {
+                self.save_state();
                 self.delete_history_file_index(i);
+                self.save_state();
             }
             Command::SelectSubtitleTrack(idx) => {
                 if let Some(path) = self.playlist.current().map(|p| p.to_path_buf()) {
@@ -824,11 +852,13 @@ impl Player {
             .map(|p| p.to_string_lossy().to_string());
         if let Some(key) = key {
             let pos = self.timeline().position_ms;
-            if self.duration_ms > 0 && pos + 5000 < self.duration_ms {
-                self.prefs.set_resume_point(&key, pos);
-            } else {
-                // 接近结尾(或时长未知): 清除续播点, 下次从头播。
-                self.prefs.set_resume_point(&key, 0);
+            if self.video.is_some() {
+                if self.duration_ms > 0 && pos + 5000 < self.duration_ms {
+                    self.prefs.set_resume_point(&key, pos);
+                } else {
+                    // 接近结尾(或时长未知): 清除续播点, 下次从头播。
+                    self.prefs.set_resume_point(&key, 0);
+                }
             }
         }
         self.prefs.volume = self.volume;
@@ -838,7 +868,9 @@ impl Player {
             .map(|p| p.to_string_lossy().to_string())
             .collect();
         self.prefs.last_index = self.playlist.current_index().unwrap_or(0);
-        let _ = self.prefs.save(&self.prefs_path);
+        if !self.prefs_path.as_os_str().is_empty() {
+            let _ = self.prefs.save(&self.prefs_path);
+        }
     }
 
     fn open(&mut self, path: &Path) {
@@ -1369,6 +1401,99 @@ mod tests {
 
         assert_eq!(p.playlist_paths(), vec![a]);
         p.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn open_file_command_appends_to_existing_playlist_and_selects_new_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_open_single_append_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let a = dir.join("a.mp4");
+        let b = dir.join("b.mp4");
+        std::fs::copy(&sample, &a).unwrap();
+        std::fs::copy(&sample, &b).unwrap();
+
+        let mut p = Player::new();
+        p.handle(Command::OpenFiles(vec![a.clone()]));
+        p.handle(Command::Open(b.clone()));
+
+        assert_eq!(p.playlist_paths(), vec![a, b]);
+        assert_eq!(p.current_index(), Some(1));
+        p.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn open_files_command_appends_to_existing_playlist_and_selects_first_new_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_open_files_append_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let a = dir.join("a.mp4");
+        let b = dir.join("b.mp4");
+        let c = dir.join("c.mp4");
+        std::fs::copy(&sample, &a).unwrap();
+        std::fs::copy(&sample, &b).unwrap();
+        std::fs::copy(&sample, &c).unwrap();
+
+        let mut p = Player::new();
+        p.handle(Command::OpenFiles(vec![a.clone()]));
+        p.handle(Command::OpenFiles(vec![b.clone(), c.clone()]));
+
+        assert_eq!(p.playlist_paths(), vec![a, b, c]);
+        assert_eq!(p.current_index(), Some(1));
+        p.handle(Command::Stop);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn opening_file_persists_latest_playlist_item_immediately() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_save_latest_open_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefs_path = dir.join("prefs.json");
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../media/tests/fixtures/sample.mp4")
+            .canonicalize()
+            .expect("先运行 media 的 gen_fixture.sh");
+        let a = dir.join("a.mp4");
+        let b = dir.join("b.mp4");
+        std::fs::copy(&sample, &a).unwrap();
+        std::fs::copy(&sample, &b).unwrap();
+
+        let mut p = Player::with_prefs(prefs_path.clone());
+        p.handle(Command::Open(a.clone()));
+        p.handle(Command::Open(b.clone()));
+
+        let restored = Player::with_prefs(prefs_path);
+        assert_eq!(restored.playlist_paths(), vec![a, b]);
+        assert_eq!(restored.current_index(), Some(1));
         std::fs::remove_dir_all(dir).ok();
     }
 
