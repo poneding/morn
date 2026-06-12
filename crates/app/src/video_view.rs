@@ -3,53 +3,6 @@ use engine::Player;
 use player_core::Command;
 use render::VideoTexture;
 use rust_i18n::t;
-use sync::{decide_frame, FrameDecision};
-
-/// 视频帧相对主时钟的容差(毫秒): PTS 落在 [master-TOL, master+TOL] 内即显示。
-const FRAME_TOL_MS: u64 = 15;
-/// UI 时钟单帧跳变超过该值时按 seek 处理, 清理等待中的旧帧。
-const SEEK_JUMP_MS: u64 = 500;
-/// seek 后遇到远在目标之后的未来帧, 视作 seek 前残留帧并丢弃。
-const STALE_FUTURE_AFTER_SEEK_MS: u64 = 1000;
-
-/// 对从队列取出的一帧的处理动作(decide_frame 的调用方语义)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FrameAction {
-    /// 到点了: 显示这一帧。
-    Show,
-    /// 已过期: 丢弃, 继续取下一帧追赶主时钟。
-    Discard,
-    /// 还没到点: 暂存为 pending, 停止取帧(保持当前画面)。
-    Hold,
-}
-
-/// 主时钟冻结(暂停)时, 未来帧必须 Hold 而非 Show, 否则视频会在音频暂停后继续推进。
-fn frame_action(master_ms: u64, pts_ms: u64, tol: u64) -> FrameAction {
-    match decide_frame(master_ms, pts_ms, tol) {
-        FrameDecision::Display => FrameAction::Show,
-        FrameDecision::Drop => FrameAction::Discard,
-        FrameDecision::Wait { .. } => FrameAction::Hold,
-    }
-}
-
-fn stale_future_after_seek(master_ms: u64, pts_ms: u64) -> bool {
-    pts_ms.saturating_sub(master_ms) > STALE_FUTURE_AFTER_SEEK_MS
-}
-
-fn future_frame_repaint_delay_ms(
-    remaining_ms: u64,
-    tolerance_ms: u64,
-    rate_pct: u16,
-) -> Option<u64> {
-    if remaining_ms <= tolerance_ms {
-        return None;
-    }
-
-    let rate = u64::from(rate_pct).max(1);
-    let wait_ms = remaining_ms - tolerance_ms;
-    let scaled = wait_ms.saturating_mul(100);
-    Some(scaled.div_ceil(rate).max(1))
-}
 
 fn empty_state_contents(ui: &mut egui::Ui, commands: &mut Vec<Command>) {
     ui.vertical_centered(|ui| {
@@ -88,18 +41,12 @@ fn fit_rect(container: egui::Rect, content: egui::Vec2) -> egui::Rect {
     egui::Rect::from_center_size(container.center(), content * scale)
 }
 
-/// 持有 wgpu 纹理与其在 egui 中的注册 id。
+/// 持有 wgpu 纹理与其在 egui 中的注册 id。选帧/同步已在引擎(`Player::present_frame`)完成,
+/// 这里只负责: 有新帧时上传纹理, 然后按宽高比绘制 + 叠加字幕。
 pub struct VideoView {
     texture: Option<VideoTexture>,
     tex_id: Option<egui::TextureId>,
     size: (u32, u32),
-    last_frame: Option<(Vec<u8>, u32, u32)>,
-    /// 已从队列取出但"尚未到显示时间"的帧, 留到主时钟追上时再显示。
-    pending: Option<media::VideoFrame>,
-    /// 上一次的主时钟读数, 用于检测向后 seek(时钟回退)。
-    last_master_ms: u64,
-    /// seek 后短暂丢弃远未来帧, 防止解码线程阻塞发送出的旧帧被 Hold 住。
-    recovering_after_seek: bool,
 }
 
 impl VideoView {
@@ -108,76 +55,21 @@ impl VideoView {
             texture: None,
             tex_id: None,
             size: (0, 0),
-            last_frame: None,
-            pending: None,
-            last_master_ms: 0,
-            recovering_after_seek: false,
         }
     }
 
-    /// 每帧调用: 按主时钟挑选并显示视频帧。
+    /// 每帧调用: 取引擎按主时钟选出的当前帧并绘制。`present_frame` 返回 None 表示
+    /// 画面无变化(沿用上一帧纹理)——暂停/未到点/队列暂空都走这条, 不重复上传。
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         frame: &mut eframe::Frame,
-        player: &Player,
+        player: &mut Player,
     ) -> Vec<Command> {
         let mut commands = Vec::new();
-        let timeline = player.timeline();
-        let master_ms = timeline.position_ms;
 
-        // seek 会让时钟单帧大幅跳变; 之前暂存的"未来帧"已失效。
-        let jumped = master_ms.saturating_add(SEEK_JUMP_MS) < self.last_master_ms
-            || master_ms > self.last_master_ms.saturating_add(SEEK_JUMP_MS);
-        if jumped {
-            self.pending = None;
-            self.recovering_after_seek = true;
-        }
-        self.last_master_ms = master_ms;
-
-        if let Some(dt) = player.video() {
-            // 先消费 pending, 再从解码队列取帧。Hold 时停止取帧并保留当前画面,
-            // 这样暂停(主时钟冻结)期间不会继续显示后续帧。
-            loop {
-                let vf = match self.pending.take() {
-                    Some(f) => f,
-                    None => match dt.try_recv_frame() {
-                        Some(f) => f,
-                        None => break,
-                    },
-                };
-                match frame_action(master_ms, vf.pts_ms, FRAME_TOL_MS) {
-                    FrameAction::Show => {
-                        self.recovering_after_seek = false;
-                        self.upload(frame, vf);
-                        break;
-                    }
-                    FrameAction::Discard => continue,
-                    FrameAction::Hold => {
-                        if self.recovering_after_seek
-                            && stale_future_after_seek(master_ms, vf.pts_ms)
-                        {
-                            continue;
-                        }
-                        self.recovering_after_seek = false;
-                        if timeline.state == player_core::PlaybackState::Playing {
-                            let remaining_ms = vf.pts_ms.saturating_sub(master_ms);
-                            if let Some(delay_ms) = future_frame_repaint_delay_ms(
-                                remaining_ms,
-                                FRAME_TOL_MS,
-                                timeline.rate_pct,
-                            ) {
-                                ui.ctx()
-                                    .request_repaint_after(std::time::Duration::from_millis(
-                                        delay_ms,
-                                    ));
-                            }
-                        }
-                        self.pending = Some(vf);
-                        break;
-                    }
-                }
-            }
+        if let Some(vf) = player.present_frame() {
+            self.upload(frame, vf);
         }
 
         let mut subtitle_rect = ui.available_rect_before_wrap();
@@ -211,7 +103,7 @@ impl VideoView {
         commands
     }
 
-    fn upload(&mut self, frame: &mut eframe::Frame, vf: media::VideoFrame) {
+    fn upload(&mut self, frame: &mut eframe::Frame, vf: &media::VideoFrame) {
         let render_state = frame
             .wgpu_render_state()
             .expect("需要 wgpu 后端 (NativeOptions.renderer = Wgpu)");
@@ -238,24 +130,9 @@ impl VideoView {
             self.size = (vf.width, vf.height);
         }
 
-        // 1080p 一帧 RGBA ≈ 8MB, clone 会浪费内存带宽; 直接 move 进 last_frame。
-        let media::VideoFrame {
-            rgba,
-            width,
-            height,
-            pts_ms: _,
-        } = vf;
         if let Some(tex) = self.texture.as_mut() {
-            tex.upload(queue, &rgba);
+            tex.upload(queue, &vf.rgba);
         }
-        self.last_frame = Some((rgba, width, height));
-    }
-
-    /// 返回最近一次显示的帧 (RGBA8, 宽, 高), 供截图使用。
-    pub fn last_frame(&self) -> Option<(&[u8], u32, u32)> {
-        self.last_frame
-            .as_ref()
-            .map(|(d, w, h)| (d.as_slice(), *w, *h))
     }
 }
 
@@ -268,114 +145,6 @@ impl Default for VideoView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
-
-    const TOL: u64 = 15;
-
-    #[test]
-    fn future_frame_holds_past_frame_discards() {
-        assert_eq!(frame_action(1000, 1000, TOL), FrameAction::Show);
-        assert_eq!(frame_action(1000, 1010, TOL), FrameAction::Show); // 容差内
-        assert_eq!(frame_action(2000, 1000, TOL), FrameAction::Discard); // 已过期
-        assert_eq!(frame_action(1000, 2000, TOL), FrameAction::Hold); // 未来帧: 必须 Hold
-    }
-
-    #[test]
-    fn future_frame_repaint_delay_enters_tolerance_window() {
-        assert_eq!(future_frame_repaint_delay_ms(TOL + 16, TOL, 100), Some(16));
-        assert_eq!(future_frame_repaint_delay_ms(TOL + 1, TOL, 100), Some(1));
-        assert_eq!(future_frame_repaint_delay_ms(TOL, TOL, 100), None);
-    }
-
-    #[test]
-    fn future_frame_repaint_delay_respects_playback_rate() {
-        assert_eq!(future_frame_repaint_delay_ms(TOL + 100, TOL, 200), Some(50));
-        assert_eq!(future_frame_repaint_delay_ms(TOL + 100, TOL, 50), Some(200));
-    }
-
-    /// 模拟一次 show() 的取帧循环: 返回应显示帧的 PTS(或 None=保持当前画面)。
-    fn pump(master_ms: u64, pending: &mut Option<u64>, buf: &mut VecDeque<u64>) -> Option<u64> {
-        let mut recovering = false;
-        pump_with_recovery(master_ms, pending, buf, &mut recovering)
-    }
-
-    fn pump_with_recovery(
-        master_ms: u64,
-        pending: &mut Option<u64>,
-        buf: &mut VecDeque<u64>,
-        recovering_after_seek: &mut bool,
-    ) -> Option<u64> {
-        loop {
-            let pts = match pending.take() {
-                Some(p) => p,
-                None => buf.pop_front()?,
-            };
-            match frame_action(master_ms, pts, TOL) {
-                FrameAction::Show => {
-                    *recovering_after_seek = false;
-                    return Some(pts);
-                }
-                FrameAction::Discard => continue,
-                FrameAction::Hold => {
-                    if *recovering_after_seek && stale_future_after_seek(master_ms, pts) {
-                        continue;
-                    }
-                    *recovering_after_seek = false;
-                    *pending = Some(pts);
-                    return None;
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn paused_clock_freezes_video() {
-        // 主时钟冻结在 1000(暂停), 缓冲区里是后续帧。
-        let mut buf: VecDeque<u64> = [1000, 1033, 1066, 1100].into_iter().collect();
-        let mut pending = None;
-
-        // 第一次 pump: 显示当前帧 1000。
-        assert_eq!(pump(1000, &mut pending, &mut buf), Some(1000));
-        assert_eq!(buf.len(), 3);
-
-        // 后续 pump(时钟仍冻结): 下一帧 1033 是未来帧 → Hold, 不显示也不再消费队列。
-        assert_eq!(pump(1000, &mut pending, &mut buf), None);
-        assert_eq!(pending, Some(1033));
-        assert_eq!(buf.len(), 2);
-
-        // 再 pump 多次, 缓冲区必须纹丝不动 —— 视频已冻结(修复前这里会连续耗尽队列)。
-        for _ in 0..5 {
-            assert_eq!(pump(1000, &mut pending, &mut buf), None);
-            assert_eq!(buf.len(), 2);
-        }
-    }
-
-    #[test]
-    fn advancing_clock_shows_held_frame_when_due() {
-        let mut buf: VecDeque<u64> = [1033, 1066].into_iter().collect();
-        let mut pending = None;
-        // 时钟 1000: 1033 还没到 → Hold。
-        assert_eq!(pump(1000, &mut pending, &mut buf), None);
-        assert_eq!(pending, Some(1033));
-        // 时钟推进到 1033: 暂存帧到点 → 显示。
-        assert_eq!(pump(1033, &mut pending, &mut buf), Some(1033));
-        assert_eq!(pending, None);
-    }
-
-    #[test]
-    fn seek_recovery_discards_stale_far_future_frame() {
-        let mut buf: VecDeque<u64> = [60_000, 1033, 1066].into_iter().collect();
-        let mut pending = None;
-        let mut recovering = true;
-
-        assert_eq!(
-            pump_with_recovery(1000, &mut pending, &mut buf, &mut recovering),
-            None
-        );
-        assert_eq!(pending, Some(1033));
-        assert!(!recovering);
-        assert_eq!(buf, VecDeque::from([1066]));
-    }
 
     #[test]
     fn empty_state_exposes_single_open_entry() {
@@ -424,6 +193,20 @@ mod tests {
     }
 
     #[test]
+    fn show_pulls_current_frame_from_engine_not_ui_side_selection() {
+        // 选帧逻辑已移入引擎: UI 只调 present_frame 上传, 不再自己 decide_frame/丢帧。
+        let source = include_str!("video_view.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("player.present_frame()"));
+        assert!(!source.contains("decide_frame"));
+        assert!(!source.contains("fn frame_action"));
+        assert!(!source.contains("request_repaint"));
+    }
+
+    #[test]
     fn video_texture_draw_uses_fixed_rect_not_image_widget_layout() {
         let source = include_str!("video_view.rs")
             .split("#[cfg(test)]")
@@ -443,13 +226,7 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        let replacement_source = source
-            .split("if need_new")
-            .nth(1)
-            .unwrap()
-            .split("self.last_frame")
-            .next()
-            .unwrap();
+        let replacement_source = source.split("if need_new").nth(1).unwrap();
 
         assert!(replacement_source.contains("self.tex_id.take()"));
         assert!(replacement_source.contains("free_texture(&id)"));

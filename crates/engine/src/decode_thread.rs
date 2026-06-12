@@ -1,7 +1,7 @@
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use media::{MediaError, VideoDecoder, VideoFrame};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -15,14 +15,37 @@ pub enum FramePull {
     End,
 }
 
+/// seek 模式: 精确(解码追赶到目标, 首帧 PTS≥目标)或关键帧吸附(落点即出帧, 秒播)。
+/// 吸附必须带方向: 快进只向前吸附(目标后的首个关键帧), 快退向后——否则长 GOP
+/// 文件快进会落回当前位置之前, 画面倒退。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeekMode {
+    Exact,
+    KeyframeBackward,
+    KeyframeForward,
+}
+
+/// 帧通道载荷: (发出时的 seek 代次 serial, 帧)。
+type SerialFrame = (u64, VideoFrame);
+
 pub struct DecodeThread {
     dimensions: (u32, u32),
-    rx: Receiver<VideoFrame>,
-    seek_tx: Sender<u64>,
+    // 帧带 serial(发出时的 applied_seek_seq): 取帧侧只放行 serial == 当前请求代次的帧,
+    // seek 前已发出/发送中的旧帧被静默丢弃(ffplay 的 serial flush 思路)。
+    rx: Receiver<SerialFrame>,
+    seek_tx: Sender<(u64, SeekMode)>,
     stop: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
     hw_active: Arc<AtomicBool>,
     frame_pending: Arc<AtomicBool>,
+    // 最近一帧已发出的 PTS(毫秒); seek 后复位为 0。供 seek 恢复期判断视频是否已追到目标。
+    last_pts: Arc<AtomicU64>,
+    // seek 代次: request_seek 递增 requested, 解码线程应用 seek 后把 applied 追平。
+    // seek-gate 仅在 applied>=本次请求代次时才信任 last_pts, 避免旧帧 PTS 误触发(向后 seek 竞态)。
+    requested_seek_seq: Arc<AtomicU64>,
+    applied_seek_seq: Arc<AtomicU64>,
+    // 累计已解码发出的帧数(诊断用: 算解码 fps)。
+    decoded_total: Arc<AtomicU64>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -33,8 +56,8 @@ impl DecodeThread {
         let dimensions = (decoder.width(), decoder.height());
         drop(decoder);
         let owned_path = path.to_path_buf(); // VideoDecoder !Send, 移动路径而非解码器
-        let (tx, rx): (Sender<VideoFrame>, Receiver<VideoFrame>) = bounded(queue_cap);
-        let (seek_tx, seek_rx) = crossbeam_channel::unbounded::<u64>();
+        let (tx, rx): (Sender<SerialFrame>, Receiver<SerialFrame>) = bounded(queue_cap);
+        let (seek_tx, seek_rx) = crossbeam_channel::unbounded::<(u64, SeekMode)>();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let ended = Arc::new(AtomicBool::new(false));
@@ -43,6 +66,14 @@ impl DecodeThread {
         let hw_active_t = hw_active.clone();
         let frame_pending = Arc::new(AtomicBool::new(false));
         let frame_pending_t = frame_pending.clone();
+        let last_pts = Arc::new(AtomicU64::new(u64::MAX));
+        let last_pts_t = last_pts.clone();
+        let requested_seek_seq = Arc::new(AtomicU64::new(0));
+        let requested_seek_seq_t = requested_seek_seq.clone();
+        let applied_seek_seq = Arc::new(AtomicU64::new(0));
+        let applied_seek_seq_t = applied_seek_seq.clone();
+        let decoded_total = Arc::new(AtomicU64::new(0));
+        let decoded_total_t = decoded_total.clone();
 
         let join = std::thread::spawn(move || {
             // 解码器在工作线程内打开, 满足 !Send 约束; 上面已校验过可打开。
@@ -57,10 +88,22 @@ impl DecodeThread {
                 while let Ok(t) = seek_rx.try_recv() {
                     pending = Some(t);
                 }
-                if let Some(t) = pending {
-                    let _ = decoder.seek_ms(t);
+                if let Some((t, mode)) = pending {
+                    let _ = match mode {
+                        SeekMode::Exact => decoder.seek_ms(t),
+                        SeekMode::KeyframeBackward => decoder.seek_ms_keyframe(t),
+                        SeekMode::KeyframeForward => decoder.seek_ms_keyframe_forward(t),
+                    };
                     ended_thread.store(false, Ordering::Relaxed);
                     eof = false;
+                    // 哨兵 u64::MAX = "seek 后尚未出帧"; 首帧落地后才反映 seek 后的解码进度,
+                    // 否则旧 PTS 会让 seek 闸门误判(尤其向后 seek)。
+                    last_pts_t.store(u64::MAX, Ordering::Relaxed);
+                    // 标记本批 seek 已应用(取当前请求代次), 之后的帧才带新 serial。
+                    applied_seek_seq_t.store(
+                        requested_seek_seq_t.load(Ordering::Relaxed),
+                        Ordering::Relaxed,
+                    );
                 }
                 if eof {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -70,10 +113,14 @@ impl DecodeThread {
                     Ok(Some(frame)) => {
                         ended_thread.store(false, Ordering::Relaxed);
                         hw_active_t.store(decoder.observed_hardware(), Ordering::Relaxed);
-                        if tx.send(frame).is_err() {
+                        let pts = frame.pts_ms;
+                        let serial = applied_seek_seq_t.load(Ordering::Relaxed);
+                        if tx.send((serial, frame)).is_err() {
                             break;
                         }
+                        last_pts_t.store(pts, Ordering::Relaxed);
                         frame_pending_t.store(true, Ordering::Relaxed);
+                        decoded_total_t.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok(None) | Err(_) => {
                         ended_thread.store(true, Ordering::Relaxed);
@@ -91,15 +138,23 @@ impl DecodeThread {
             ended,
             hw_active,
             frame_pending,
+            last_pts,
+            requested_seek_seq,
+            applied_seek_seq,
+            decoded_total,
             join: Some(join),
         })
     }
 
-    /// 阻塞取下一帧; 队列空且线程结束返回 End。
+    /// 阻塞取下一帧; 队列空且线程结束返回 End。seek 前的陈旧帧被静默丢弃。
     pub fn recv_frame(&self) -> FramePull {
         loop {
             match self.rx.recv_timeout(std::time::Duration::from_millis(10)) {
-                Ok(f) => return FramePull::Frame(f),
+                Ok((serial, f)) => {
+                    if serial == self.requested_seek_seq.load(Ordering::Relaxed) {
+                        return FramePull::Frame(f);
+                    }
+                }
                 Err(RecvTimeoutError::Disconnected) => return FramePull::End,
                 Err(RecvTimeoutError::Timeout) => {
                     if self.ended.load(Ordering::Relaxed) {
@@ -114,17 +169,27 @@ impl DecodeThread {
     }
 
     /// 非阻塞取帧; 无帧返回 None。UI 线程用这个避免卡顿。
+    /// 只放行当前 seek 代次的帧: 旧 serial 帧(seek 前已发出/发送中)直接丢弃,
+    /// 否则向后 seek 时旧帧的"未来 PTS"会被呈现端 Hold 住, 永久阻塞新帧。
     pub fn try_recv_frame(&self) -> Option<VideoFrame> {
-        self.rx.try_recv().ok()
+        loop {
+            let (serial, f) = self.rx.try_recv().ok()?;
+            if serial == self.requested_seek_seq.load(Ordering::Relaxed) {
+                return Some(f);
+            }
+        }
     }
 
     pub fn dimensions(&self) -> (u32, u32) {
         self.dimensions
     }
 
-    /// 请求 seek 到目标毫秒, 由解码线程在下一轮循环开头应用。
-    pub fn request_seek(&self, ms: u64) {
-        let _ = self.seek_tx.send(ms);
+    /// 请求 seek 到目标毫秒(按指定模式), 由解码线程在下一轮循环开头应用。返回本次
+    /// 请求的代次号, 调用方据此配合 applied_seek_seq() 判断该 seek 是否已实际生效。
+    pub fn request_seek(&self, ms: u64, mode: SeekMode) -> u64 {
+        let seq = self.requested_seek_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let _ = self.seek_tx.send((ms, mode));
+        seq
     }
 
     /// 当前是否实际硬件解码(由解码线程按帧更新)。
@@ -136,6 +201,36 @@ impl DecodeThread {
     /// 把"有新帧可显示"翻译成一次即时 repaint, 替代固定 16ms 轮询。
     pub fn take_frame_pending(&self) -> bool {
         self.frame_pending.swap(false, Ordering::Relaxed)
+    }
+
+    /// seek 应用后最近已发出帧的 PTS(毫秒); 尚未出帧时为 None。
+    /// 精确 seek: 首帧即 ≥ 目标(闸门据此放行); 关键帧吸附: 读取时刻的最新帧
+    /// 即吸附落点(时钟/音频对齐到它, 更早的队列帧被 present 自然丢弃)。
+    pub fn latest_pts_after_seek(&self) -> Option<u64> {
+        match self.last_pts.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            pts => Some(pts),
+        }
+    }
+
+    /// 解码是否已到流尾(或出错终止)。
+    pub fn is_ended(&self) -> bool {
+        self.ended.load(Ordering::Relaxed)
+    }
+
+    /// 累计已解码发出的帧数(诊断用)。
+    pub fn decoded_total(&self) -> u64 {
+        self.decoded_total.load(Ordering::Relaxed)
+    }
+
+    /// 当前帧队列里待消费的帧数(诊断用: 看解码是否跟得上)。
+    pub fn queue_len(&self) -> usize {
+        self.rx.len()
+    }
+
+    /// 解码线程已应用的 seek 代次。>= request_seek 返回值时, 表示该 seek 已生效。
+    pub fn applied_seek_seq(&self) -> u64 {
+        self.applied_seek_seq.load(Ordering::Relaxed)
     }
 
     pub fn stop(mut self) {
@@ -216,6 +311,45 @@ mod tests {
         let handle = DecodeThread::spawn(&path, 8).unwrap();
 
         assert_eq!(handle.dimensions(), (160, 120));
+        handle.stop();
+    }
+
+    #[test]
+    fn frames_emitted_before_seek_are_filtered_out_after_seek() {
+        // 竞态根因复现: seek 请求发出后, 解码线程可能仍把 seek 前的旧帧发进队列
+        // (发送阻塞在先)。旧帧若被消费, 向后 seek 时其"未来 PTS"会被 Hold 为
+        // pending, 永久阻塞新帧 → 画面冻结。带 serial 过滤后, 取帧方在 seek 后
+        // 取到的第一帧必然是 seek 之后解出的(applied_seek_seq 已追平)。
+        let path = fixture();
+        assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
+
+        let handle = DecodeThread::spawn(&path, 8).unwrap();
+        // 等队列填满: 此时队列里全是 seek 前(serial=0)的旧帧, 解码线程阻塞在发送上。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while handle.queue_len() < 8 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(handle.queue_len(), 8, "队列未填满, 无法构造竞态前提");
+
+        handle.request_seek(0, SeekMode::Exact);
+
+        // 取帧: 返回的第一帧必须是 seek 之后解出的——即此刻 applied_seek_seq 已 ≥1。
+        // 无 serial 过滤时, 这里会立刻拿到队列里的旧帧(applied 仍为 0)而失败。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if let Some(_f) = handle.try_recv_frame() {
+                assert!(
+                    handle.applied_seek_seq() >= 1,
+                    "seek 后取到的首帧来自 seek 之前(陈旧帧未被过滤)"
+                );
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "3s 内未取到 seek 后的新帧"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         handle.stop();
     }
 }
