@@ -59,7 +59,7 @@ crates/
 | Windows | x86_64 | `.msi` 或 `.exe` |
 | Windows | arm64 | `.exe` |
 
-下载后按系统习惯安装即可：macOS 打开 `.dmg`，Windows 运行安装程序，Linux 可直接运行 `.AppImage` 或使用系统包管理器安装 `.deb` / `.rpm`。
+下载后按系统习惯安装即可：macOS 打开 `.dmg` 后将 `Morn.app` 拖到 `Applications` 文件夹，Windows 运行安装程序，Linux 可直接运行 `.AppImage` 或使用系统包管理器安装 `.deb` / `.rpm`。
 
 ## 开发
 

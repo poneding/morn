@@ -14,6 +14,7 @@ if [[ ! -x "${binary}" ]]; then
 fi
 
 app="dist/Morn.app"
+dmgroot="dist/dmgroot-${suffix}"
 contents="${app}/Contents"
 macos="${contents}/MacOS"
 resources="${contents}/Resources"
@@ -21,7 +22,7 @@ frameworks="${contents}/Frameworks"
 iconset="dist/Morn.iconset"
 icns="${resources}/Morn.icns"
 
-rm -rf "${app}" "${iconset}"
+rm -rf "${app}" "${dmgroot}" "${iconset}"
 mkdir -p "${macos}" "${resources}" "${frameworks}" "${iconset}"
 
 cp "${binary}" "${macos}/Morn"
@@ -78,9 +79,14 @@ dylibbundler \
   -p "@executable_path/../Frameworks/"
 
 codesign --force --deep --sign - "${app}"
+
+mkdir -p "${dmgroot}"
+cp -a "${app}" "${dmgroot}/"
+ln -s /Applications "${dmgroot}/Applications"
+
 hdiutil create \
   -volname "Morn" \
-  -srcfolder "${app}" \
+  -srcfolder "${dmgroot}" \
   -ov \
   -format UDZO \
   "dist/morn-${release_tag}-${suffix}.dmg"
