@@ -767,6 +767,19 @@ fn escape_shortcut_action(
     }
 }
 
+fn seek_shortcut_target(pos_ms: u64, duration_ms: u64, step_secs: u64, forward: bool) -> u64 {
+    let step_ms = step_secs.saturating_mul(1000);
+    if forward {
+        if duration_ms > 0 {
+            pos_ms.saturating_add(step_ms).min(duration_ms)
+        } else {
+            pos_ms.saturating_add(step_ms)
+        }
+    } else {
+        pos_ms.saturating_sub(step_ms)
+    }
+}
+
 fn format_ms_label(ms: u64) -> String {
     let total_secs = ms / 1000;
     format!("{:02}:{:02}", total_secs / 60, total_secs % 60)
@@ -797,6 +810,21 @@ fn video_window_resize_size(
     let size = window_size_for_video_dimensions(width, height)?;
     *last_resized_video_path = Some(current_path);
     Some(size)
+}
+
+fn player_should_request_repaint(
+    interacting: bool,
+    state: player_core::PlaybackState,
+    seek_pending: bool,
+    video_loaded: bool,
+    current_frame_visible: bool,
+) -> bool {
+    !interacting
+        && (state == player_core::PlaybackState::Playing
+            || seek_pending
+            || (video_loaded
+                && state == player_core::PlaybackState::Paused
+                && !current_frame_visible))
 }
 
 impl eframe::App for PlayerApp {
@@ -920,7 +948,7 @@ impl eframe::App for PlayerApp {
         if !ctx.egui_wants_keyboard_input() {
             let playlist_visible_for_shortcuts = self.show_playlist && !self.playlist_auto_hidden;
             let platform = crate::shortcuts::ShortcutPlatform::current();
-            let step_ms = self.player.prefs().seek_step_secs * 1000;
+            let step_secs = self.player.prefs().seek_step_secs;
             let pos = t.position_ms;
             let dur = t.duration_ms;
             let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1153,7 +1181,7 @@ impl eframe::App for PlayerApp {
                 shortcut_handled = true;
             }
             if !shortcut_handled && left {
-                let target = pos.saturating_sub(step_ms);
+                let target = seek_shortcut_target(pos, dur, step_secs, false);
                 self.player.handle(player_core::Command::SeekTo(target));
                 self.set_shortcut_notice(format!(
                     "{}：{}",
@@ -1163,11 +1191,7 @@ impl eframe::App for PlayerApp {
                 shortcut_handled = true;
             }
             if !shortcut_handled && right {
-                let target = if dur > 0 {
-                    (pos + step_ms).min(dur)
-                } else {
-                    pos + step_ms
-                };
+                let target = seek_shortcut_target(pos, dur, step_secs, true);
                 self.player.handle(player_core::Command::SeekTo(target));
                 self.set_shortcut_notice(format!(
                     "{}：{}",
@@ -1603,10 +1627,13 @@ impl eframe::App for PlayerApp {
         // 唤醒——根治"播几秒卡一下"。拖窗口/滑块(interacting)时让出, 避免与 OS resize 争抢合成带宽;
         // 暂停/停止时不请求, 画面自然静止。seek 闸门挂起期间(含暂停态 seek)也保持重绘,
         // 以驱动闸门放行检测并尽快显示目标帧。
-        if !interacting
-            && (self.player.timeline().state == player_core::PlaybackState::Playing
-                || self.player.seek_pending())
-        {
+        if player_should_request_repaint(
+            interacting,
+            self.player.timeline().state,
+            self.player.seek_pending(),
+            self.player.video().is_some(),
+            self.player.current_frame_rgba().is_some(),
+        ) {
             ctx.request_repaint();
         }
     }
@@ -2371,6 +2398,63 @@ mod tests {
         // 播放态连续重绘(取代旧的 frame_pending 唤醒)。
         assert!(source.contains("ctx.request_repaint()"));
         assert!(!source.contains("take_frame_pending"));
+    }
+
+    #[test]
+    fn seek_shortcut_target_uses_configured_step_seconds() {
+        assert_eq!(
+            super::seek_shortcut_target(50_000, 120_000, 20, false),
+            30_000
+        );
+        assert_eq!(super::seek_shortcut_target(5_000, 120_000, 20, false), 0);
+        assert_eq!(
+            super::seek_shortcut_target(50_000, 120_000, 20, true),
+            70_000
+        );
+        assert_eq!(
+            super::seek_shortcut_target(115_000, 120_000, 20, true),
+            120_000
+        );
+        assert_eq!(super::seek_shortcut_target(50_000, 0, 30, true), 80_000);
+    }
+
+    #[test]
+    fn restored_paused_media_repaints_until_first_frame_arrives() {
+        assert!(super::player_should_request_repaint(
+            false,
+            player_core::PlaybackState::Paused,
+            false,
+            true,
+            false,
+        ));
+        assert!(!super::player_should_request_repaint(
+            false,
+            player_core::PlaybackState::Paused,
+            false,
+            true,
+            true,
+        ));
+        assert!(!super::player_should_request_repaint(
+            true,
+            player_core::PlaybackState::Paused,
+            false,
+            true,
+            false,
+        ));
+        assert!(super::player_should_request_repaint(
+            false,
+            player_core::PlaybackState::Playing,
+            false,
+            true,
+            true,
+        ));
+        assert!(super::player_should_request_repaint(
+            false,
+            player_core::PlaybackState::Paused,
+            true,
+            true,
+            true,
+        ));
     }
 
     #[test]

@@ -199,32 +199,40 @@ impl Player {
 
     pub fn set_language(&mut self, v: &str) {
         self.prefs.language = v.to_string();
+        self.persist_preferences();
     }
     pub fn set_seek_step(&mut self, secs: u64) {
         self.prefs.seek_step_secs = secs;
+        self.persist_preferences();
     }
     pub fn set_theme(&mut self, v: &str) {
         self.prefs.theme = v.to_string();
+        self.persist_preferences();
     }
     pub fn set_subtitle_font_size(&mut self, size: f32) {
         self.prefs.subtitle_font_size = size;
+        self.persist_preferences();
     }
     pub fn set_playback_mode(&mut self, mode: persist::PlaybackMode) {
         self.prefs.playback_mode = mode;
+        self.persist_preferences();
     }
     pub fn set_check_updates_on_startup(&mut self, enabled: bool) {
         self.prefs.check_updates_on_startup = enabled;
         if !enabled {
             self.prefs.check_beta_updates = false;
         }
+        self.persist_preferences();
     }
     pub fn set_check_beta_updates(&mut self, enabled: bool) {
         self.prefs.check_beta_updates = enabled && self.prefs.check_updates_on_startup;
+        self.persist_preferences();
     }
     pub fn set_screenshot_dir(&mut self, path: &str) {
         self.prefs.screenshot_dir = persist::resolve_screenshot_dir(path)
             .to_string_lossy()
             .into_owned();
+        self.persist_preferences();
     }
 
     fn raw_position_ms(&self) -> u64 {
@@ -868,6 +876,10 @@ impl Player {
             .map(|p| p.to_string_lossy().to_string())
             .collect();
         self.prefs.last_index = self.playlist.current_index().unwrap_or(0);
+        self.persist_preferences();
+    }
+
+    fn persist_preferences(&self) {
         if !self.prefs_path.as_os_str().is_empty() {
             let _ = self.prefs.save(&self.prefs_path);
         }
@@ -1774,6 +1786,29 @@ mod tests {
             !p.prefs().check_beta_updates,
             "beta updates cannot stay enabled when startup checks are disabled"
         );
+    }
+
+    #[test]
+    fn preference_setters_persist_immediately() {
+        let dir = std::env::temp_dir().join(format!(
+            "morn_prefs_setters_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefs_path = dir.join("prefs.json");
+
+        let mut p = Player::with_prefs(prefs_path.clone());
+        p.set_seek_step(20);
+        p.set_theme("dark");
+
+        let loaded = persist::Preferences::load(&prefs_path).unwrap();
+        assert_eq!(loaded.seek_step_secs, 20);
+        assert_eq!(loaded.theme, "dark");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
