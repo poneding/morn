@@ -38,10 +38,12 @@ pub struct DecodeThread {
     ended: Arc<AtomicBool>,
     hw_active: Arc<AtomicBool>,
     frame_pending: Arc<AtomicBool>,
-    // 最近一帧已发出的 PTS(毫秒); seek 后复位为 0。供 seek 恢复期判断视频是否已追到目标。
-    last_pts: Arc<AtomicU64>,
+    // seek 应用后首个已发出帧的 PTS(毫秒); 尚未出帧时为 u64::MAX。供 seek 闸门
+    // 对齐到真实落点。必须保持首帧 PTS，不可被后续解码帧覆盖，否则 UI 消费慢或
+    // 无音频设备时，闸门会错误对齐到已经解码到队列里的后续帧。
+    landing_pts: Arc<AtomicU64>,
     // seek 代次: request_seek 递增 requested, 解码线程应用 seek 后把 applied 追平。
-    // seek-gate 仅在 applied>=本次请求代次时才信任 last_pts, 避免旧帧 PTS 误触发(向后 seek 竞态)。
+    // seek-gate 仅在 applied>=本次请求代次时才信任 landing_pts, 避免旧帧 PTS 误触发(向后 seek 竞态)。
     requested_seek_seq: Arc<AtomicU64>,
     applied_seek_seq: Arc<AtomicU64>,
     // 累计已解码发出的帧数(诊断用: 算解码 fps)。
@@ -66,8 +68,8 @@ impl DecodeThread {
         let hw_active_t = hw_active.clone();
         let frame_pending = Arc::new(AtomicBool::new(false));
         let frame_pending_t = frame_pending.clone();
-        let last_pts = Arc::new(AtomicU64::new(u64::MAX));
-        let last_pts_t = last_pts.clone();
+        let landing_pts = Arc::new(AtomicU64::new(u64::MAX));
+        let landing_pts_t = landing_pts.clone();
         let requested_seek_seq = Arc::new(AtomicU64::new(0));
         let requested_seek_seq_t = requested_seek_seq.clone();
         let applied_seek_seq = Arc::new(AtomicU64::new(0));
@@ -96,9 +98,9 @@ impl DecodeThread {
                     };
                     ended_thread.store(false, Ordering::Relaxed);
                     eof = false;
-                    // 哨兵 u64::MAX = "seek 后尚未出帧"; 首帧落地后才反映 seek 后的解码进度,
+                    // 哨兵 u64::MAX = "seek 后尚未出帧"; 首帧落地后才反映 seek 后的落点,
                     // 否则旧 PTS 会让 seek 闸门误判(尤其向后 seek)。
-                    last_pts_t.store(u64::MAX, Ordering::Relaxed);
+                    landing_pts_t.store(u64::MAX, Ordering::Relaxed);
                     // 标记本批 seek 已应用(取当前请求代次), 之后的帧才带新 serial。
                     applied_seek_seq_t.store(
                         requested_seek_seq_t.load(Ordering::Relaxed),
@@ -118,7 +120,14 @@ impl DecodeThread {
                         if tx.send((serial, frame)).is_err() {
                             break;
                         }
-                        last_pts_t.store(pts, Ordering::Relaxed);
+                        // 只记录本次 seek 后首个发出的帧 PTS。解码线程可能在 UI 消费前继续前跑，
+                        // 后续帧不能覆盖落点，否则 seek 闸门会对齐到错误的后续位置。
+                        let _ = landing_pts_t.compare_exchange(
+                            u64::MAX,
+                            pts,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        );
                         frame_pending_t.store(true, Ordering::Relaxed);
                         decoded_total_t.fetch_add(1, Ordering::Relaxed);
                     }
@@ -138,7 +147,7 @@ impl DecodeThread {
             ended,
             hw_active,
             frame_pending,
-            last_pts,
+            landing_pts,
             requested_seek_seq,
             applied_seek_seq,
             decoded_total,
@@ -203,11 +212,11 @@ impl DecodeThread {
         self.frame_pending.swap(false, Ordering::Relaxed)
     }
 
-    /// seek 应用后最近已发出帧的 PTS(毫秒); 尚未出帧时为 None。
-    /// 精确 seek: 首帧即 ≥ 目标(闸门据此放行); 关键帧吸附: 读取时刻的最新帧
-    /// 即吸附落点(时钟/音频对齐到它, 更早的队列帧被 present 自然丢弃)。
+    /// seek 应用后首个已发出帧的 PTS(毫秒); 尚未出帧时为 None。
+    /// 精确 seek: 首帧即 ≥ 目标(闸门据此放行); 关键帧吸附: 首帧
+    /// 即吸附落点(时钟/音频对齐到它)，即使解码线程继续预读也保持稳定。
     pub fn latest_pts_after_seek(&self) -> Option<u64> {
-        match self.last_pts.load(Ordering::Relaxed) {
+        match self.landing_pts.load(Ordering::Relaxed) {
             u64::MAX => None,
             pts => Some(pts),
         }
@@ -311,6 +320,32 @@ mod tests {
         let handle = DecodeThread::spawn(&path, 8).unwrap();
 
         assert_eq!(handle.dimensions(), (160, 120));
+        handle.stop();
+    }
+
+    #[test]
+    fn keyframe_seek_landing_pts_is_stable_until_next_seek() {
+        // seek 闸门需要的是“本次 seek 后第一帧”的 PTS 来对齐时钟。
+        // 若只暴露最新已解码 PTS，解码线程在 UI 消费前继续前跑会覆盖落点，
+        // 无音频设备/墙钟环境下就会把 seek 放行位置对齐到 600ms/1500ms 等后续帧。
+        let path = fixture();
+        assert!(path.exists(), "先运行 media 的 gen_fixture.sh");
+
+        let handle = DecodeThread::spawn(&path, 16).unwrap();
+        handle.request_seek(100, SeekMode::KeyframeBackward);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while handle.latest_pts_after_seek().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        // 不消费队列，给解码线程机会继续发出后续帧；落点 PTS 仍应稳定为首帧 0ms。
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert_eq!(
+            handle.latest_pts_after_seek(),
+            Some(0),
+            "关键帧 seek 的落点 PTS 不应被后续解码帧覆盖"
+        );
         handle.stop();
     }
 

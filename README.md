@@ -1,4 +1,20 @@
+<div align="center">
+
 # Morn
+
+<img src="crates/app/assets/morn-logo.svg" alt="Morn logo" width="112" height="112" />
+
+**跨平台轻量视频播放器：启动快、体积克制、播放流畅。**
+
+[![CI](https://github.com/poneding/morn/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/poneding/morn/actions/workflows/ci.yml)
+[![Release](https://github.com/poneding/morn/actions/workflows/release.yml/badge.svg)](https://github.com/poneding/morn/actions/workflows/release.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/poneding/morn?sort=semver)](https://github.com/poneding/morn/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](Cargo.toml)
+[![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust)](https://www.rust-lang.org/)
+
+</div>
+
+---
 
 Morn 是一个用 Rust 构建的跨平台轻量视频播放器。项目目标是保持体积克制、启动快、播放流畅，同时保留日常播放需要的文件打开、播放控制、播放列表、字幕、倍速、截图和播放记忆。
 
@@ -31,6 +47,19 @@ crates/
 ## 环境依赖
 
 本项目涉及 C 库绑定（FFmpeg），需要安装 Rust 环境及相关开发库。详细的各平台（Windows/macOS/Linux）环境搭建手册请参考 [开发环境配置指南](docs/DEVELOPMENT.md)。
+
+## 安装
+
+前往 [GitHub Releases](https://github.com/poneding/morn/releases/latest) 下载最新版本。Release 页面会按平台提供安装包：
+
+| 平台 | 架构 | 推荐下载 |
+| --- | --- | --- |
+| Linux | x86_64 / arm64 | `.AppImage`、`.deb` 或 `.rpm` |
+| macOS | Intel / Apple Silicon | `.dmg` |
+| Windows | x86_64 | `.msi` 或 `.exe` |
+| Windows | arm64 | `.exe` |
+
+下载后按系统习惯安装即可：macOS 打开 `.dmg`，Windows 运行安装程序，Linux 可直接运行 `.AppImage` 或使用系统包管理器安装 `.deb` / `.rpm`。
 
 ## 开发
 
