@@ -1,3 +1,10 @@
+//! Video decoder integration tests.
+//!
+//! The fixture is small but still goes through demuxing, decoding, timestamp
+//! conversion, and RGBA output.  The expected frame range allows minor FFmpeg build
+//! differences while still catching missing frames, wrong dimensions, and
+//! non-monotonic PTS output.
+
 use media::VideoDecoder;
 use std::path::Path;
 
@@ -10,7 +17,7 @@ fn decodes_all_video_frames_to_rgba() {
     let path = fixture();
     assert!(path.exists(), "先运行 tests/gen_fixture.sh 生成样本");
 
-    let mut dec = VideoDecoder::open(&path).unwrap();
+    let mut dec = VideoDecoder::open_path(&path).unwrap();
     assert_eq!(dec.width(), 160);
     assert_eq!(dec.height(), 120);
 
@@ -30,5 +37,6 @@ fn decodes_all_video_frames_to_rgba() {
 #[test]
 fn open_nonexistent_file_returns_err() {
     let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/does_not_exist.mp4");
-    assert!(VideoDecoder::open(&missing).is_err());
+    let missing_result = VideoDecoder::open_path(&missing);
+    assert!(missing_result.is_err());
 }

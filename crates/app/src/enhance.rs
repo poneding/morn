@@ -1,9 +1,21 @@
+//! Secondary playback tools.
+//!
+//! The enhance bar hosts controls that are adjacent to playback but are not core
+//! transport: playback rate selection and screenshot capture.  It returns a compact
+//! action object so the app can route commands through the normal player path while
+//! handling screenshots against the currently presented video frame.
+//!
+//! Screenshot saving validates the destination directory and surfaces filesystem
+//! errors to the caller.  The UI layer owns user-facing notices because it knows
+//! whether a frame was available and where the configured screenshot directory lives.
+
 use eframe::egui;
 use player_core::Command;
 use rust_i18n::t;
 use std::path::{Path, PathBuf};
 
 pub const RATE_OPTIONS: [u16; 8] = [25, 50, 75, 100, 125, 150, 175, 200];
+const RATE_BUTTON_WIDTH: f32 = 68.0;
 
 /// 增强控件本帧产生的动作。
 pub struct EnhanceActions {
@@ -15,28 +27,43 @@ pub struct EnhanceActions {
 /// `rate_pct` 为当前倍速(百分比), 用于下拉显示当前值。
 pub fn enhance_bar(ui: &mut egui::Ui, rate_pct: u16) -> EnhanceActions {
     let mut commands = Vec::new();
-    let mut screenshot = false;
+    // The rate label is a plain button (not a dropdown widget) so the popup can
+    // share the same floating-control anchoring as the volume panel.
     let rate_response = ui
-        .button(format!("{:.2}x ▼", rate_pct as f32 / 100.0))
+        .add_sized(
+            [RATE_BUTTON_WIDTH, crate::controls::CONTROL_BUTTON_SIZE],
+            egui::Button::new(
+                egui::RichText::new(format!("{:.2}x ▼", rate_pct as f32 / 100.0))
+                    .family(egui::FontFamily::Monospace),
+            ),
+        )
         .on_hover_text(crate::shortcuts::shortcut_tooltip(
             t!("rate"),
             crate::shortcuts::rate_shortcut_label(),
         ));
     rate_popup(&rate_response, rate_pct, &mut commands);
 
-    let screenshot_response = ui
-        .button("📷")
-        .on_hover_text(crate::shortcuts::shortcut_tooltip(t!("screenshot"), "S"));
-    if screenshot_response.clicked() {
-        screenshot = true;
-    }
     EnhanceActions {
         commands,
-        screenshot,
+        screenshot: screenshot_button_clicked(ui),
     }
 }
 
+fn screenshot_button_clicked(ui: &mut egui::Ui) -> bool {
+    ui.add_sized(
+        [
+            crate::controls::CONTROL_BUTTON_SIZE,
+            crate::controls::CONTROL_BUTTON_SIZE,
+        ],
+        egui::Button::new("📷"),
+    )
+    .on_hover_text(crate::shortcuts::shortcut_tooltip(t!("screenshot"), "S"))
+    .clicked()
+}
+
 fn rate_popup(rate_response: &egui::Response, rate_pct: u16, commands: &mut Vec<Command>) {
+    // Rate changes are returned as normal player commands; screenshot remains a
+    // separate UI action because it needs the currently uploaded frame.
     egui::Popup::menu(rate_response)
         .anchor(crate::visuals::popup_anchor_above_floating_control_bar(
             rate_response,
@@ -44,15 +71,19 @@ fn rate_popup(rate_response: &egui::Response, rate_pct: u16, commands: &mut Vec<
         .align(egui::RectAlign::TOP)
         .align_alternatives(&[])
         .gap(crate::visuals::FLOATING_PANEL_MARGIN)
-        .style(crate::visuals::frosted_popup_style())
+        .style(crate::visuals::panel_popup_style())
         .show(|ui| {
             for pct in RATE_OPTIONS {
                 if ui
-                    .selectable_label(rate_pct == pct, format!("{:.2}x", pct as f32 / 100.0))
+                    .selectable_label(
+                        rate_pct == pct,
+                        egui::RichText::new(format!("{:.2}x", pct as f32 / 100.0))
+                            .family(egui::FontFamily::Monospace),
+                    )
                     .clicked()
                 {
                     commands.push(Command::SetRate(pct));
-                    ui.close();
+                    let _closed = ui.close();
                 }
             }
         });
@@ -61,6 +92,8 @@ fn rate_popup(rate_response: &egui::Response, rate_pct: u16, commands: &mut Vec<
 /// 把 RGBA8 帧写为 PNG, 返回保存路径。
 pub fn save_screenshot(rgba: &[u8], w: u32, h: u32, dir: &Path) -> std::io::Result<PathBuf> {
     ensure_screenshot_dir(dir)?;
+    // The timestamp keeps filenames stable enough for repeated screenshots without
+    // introducing another counter into app state.
     let path = dir.join(format!("morn-shot-{}.png", now_stamp()));
     image::save_buffer(&path, rgba, w, h, image::ExtendedColorType::Rgba8)
         .map_err(std::io::Error::other)?;
@@ -68,6 +101,8 @@ pub fn save_screenshot(rgba: &[u8], w: u32, h: u32, dir: &Path) -> std::io::Resu
 }
 
 fn ensure_screenshot_dir(dir: &Path) -> std::io::Result<()> {
+    // Reject an empty path before create_dir_all, which would otherwise target the
+    // process working directory on some platforms.
     if dir.as_os_str().is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -79,6 +114,8 @@ fn ensure_screenshot_dir(dir: &Path) -> std::io::Result<()> {
 
 fn now_stamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
+    // If the system clock is before the Unix epoch, keep the saver deterministic
+    // instead of surfacing an unrelated time error to the screenshot flow.
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -189,7 +226,7 @@ mod tests {
 
         assert!(path.starts_with(&dir));
         assert!(path.exists());
-        std::fs::remove_dir_all(dir).ok();
+        let _cleanup = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -207,7 +244,7 @@ mod tests {
         assert!(nested.exists());
         assert!(path.starts_with(&nested));
         assert!(path.exists());
-        std::fs::remove_dir_all(dir).ok();
+        let _cleanup = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -51,91 +51,156 @@ pub struct DecodeThread {
     join: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+struct DecodeThreadShared {
+    stop: Arc<AtomicBool>,
+    ended: Arc<AtomicBool>,
+    hw_active: Arc<AtomicBool>,
+    frame_pending: Arc<AtomicBool>,
+    landing_pts: Arc<AtomicU64>,
+    requested_seek_seq: Arc<AtomicU64>,
+    applied_seek_seq: Arc<AtomicU64>,
+    decoded_total: Arc<AtomicU64>,
+}
+
+impl DecodeThreadShared {
+    fn new() -> Self {
+        Self {
+            stop: Arc::new(AtomicBool::new(false)),
+            ended: Arc::new(AtomicBool::new(false)),
+            hw_active: Arc::new(AtomicBool::new(false)),
+            frame_pending: Arc::new(AtomicBool::new(false)),
+            landing_pts: Arc::new(AtomicU64::new(u64::MAX)),
+            requested_seek_seq: Arc::new(AtomicU64::new(0)),
+            applied_seek_seq: Arc::new(AtomicU64::new(0)),
+            decoded_total: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+struct DecodeWorker {
+    decoder: VideoDecoder,
+    tx: Sender<SerialFrame>,
+    seek_rx: Receiver<(u64, SeekMode)>,
+    shared: DecodeThreadShared,
+    eof: bool,
+}
+
+impl DecodeWorker {
+    fn from_path(
+        path: std::path::PathBuf,
+        tx: Sender<SerialFrame>,
+        seek_rx: Receiver<(u64, SeekMode)>,
+        shared: DecodeThreadShared,
+    ) -> Option<Self> {
+        let decoder = VideoDecoder::open_path(&path).ok()?;
+        Some(Self {
+            decoder,
+            tx,
+            seek_rx,
+            shared,
+            eof: false,
+        })
+    }
+
+    fn run(mut self) {
+        while !self.shared.stop.load(Ordering::Relaxed) {
+            self.apply_latest_seek();
+            if self.eof {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
+            }
+            if !self.decode_and_publish_next_frame() {
+                break;
+            }
+        }
+    }
+
+    fn apply_latest_seek(&mut self) {
+        let Some((target_ms, mode)) = latest_seek_request(&self.seek_rx) else {
+            return;
+        };
+        apply_seek_to_decoder(&mut self.decoder, target_ms, mode);
+        self.shared.ended.store(false, Ordering::Relaxed);
+        self.eof = false;
+        self.shared.landing_pts.store(u64::MAX, Ordering::Relaxed);
+        self.shared.applied_seek_seq.store(
+            self.shared.requested_seek_seq.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+    }
+
+    fn decode_and_publish_next_frame(&mut self) -> bool {
+        match self.decoder.next_frame() {
+            Ok(Some(frame)) => self.publish_frame(frame),
+            Ok(None) | Err(_) => {
+                self.shared.ended.store(true, Ordering::Relaxed);
+                self.eof = true;
+                true
+            }
+        }
+    }
+
+    fn publish_frame(&mut self, frame: VideoFrame) -> bool {
+        self.shared.ended.store(false, Ordering::Relaxed);
+        self.shared
+            .hw_active
+            .store(self.decoder.observed_hardware(), Ordering::Relaxed);
+        let pts = frame.pts_ms;
+        let serial = self.shared.applied_seek_seq.load(Ordering::Relaxed);
+        let send_result = self.tx.send((serial, frame));
+        if send_result.is_err() {
+            return false;
+        }
+        // 只记录本次 seek 后首个发出的帧 PTS。解码线程可能在 UI 消费前继续前跑，
+        // 后续帧不能覆盖落点，否则 seek 闸门会对齐到错误的后续位置。
+        let _ = self.shared.landing_pts.compare_exchange(
+            u64::MAX,
+            pts,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+        self.shared.frame_pending.store(true, Ordering::Relaxed);
+        self.shared.decoded_total.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+}
+
+fn latest_seek_request(seek_rx: &Receiver<(u64, SeekMode)>) -> Option<(u64, SeekMode)> {
+    let mut pending = None;
+    while let Ok(request) = seek_rx.try_recv() {
+        pending = Some(request);
+    }
+    pending
+}
+
+fn apply_seek_to_decoder(decoder: &mut VideoDecoder, target_ms: u64, mode: SeekMode) {
+    let result = match mode {
+        SeekMode::Exact => decoder.seek_ms(target_ms),
+        SeekMode::KeyframeBackward => decoder.seek_ms_keyframe(target_ms),
+        SeekMode::KeyframeForward => decoder.seek_ms_keyframe_forward(target_ms),
+    };
+    if let Err(err) = result {
+        eprintln!("视频 seek 失败({target_ms}ms): {err}");
+    }
+}
+
 impl DecodeThread {
     /// 启动解码线程, `queue_cap` 为有界队列容量(背压上限)。
     pub fn spawn(path: &Path, queue_cap: usize) -> Result<Self, MediaError> {
-        let decoder = VideoDecoder::open(path)?; // 在调用线程先验证可打开
+        let decoder = VideoDecoder::open_path(path)?; // 在调用线程先验证可打开
         let dimensions = (decoder.width(), decoder.height());
         drop(decoder);
         let owned_path = path.to_path_buf(); // VideoDecoder !Send, 移动路径而非解码器
         let (tx, rx): (Sender<SerialFrame>, Receiver<SerialFrame>) = bounded(queue_cap);
         let (seek_tx, seek_rx) = crossbeam_channel::unbounded::<(u64, SeekMode)>();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_thread = stop.clone();
-        let ended = Arc::new(AtomicBool::new(false));
-        let ended_thread = ended.clone();
-        let hw_active = Arc::new(AtomicBool::new(false));
-        let hw_active_t = hw_active.clone();
-        let frame_pending = Arc::new(AtomicBool::new(false));
-        let frame_pending_t = frame_pending.clone();
-        let landing_pts = Arc::new(AtomicU64::new(u64::MAX));
-        let landing_pts_t = landing_pts.clone();
-        let requested_seek_seq = Arc::new(AtomicU64::new(0));
-        let requested_seek_seq_t = requested_seek_seq.clone();
-        let applied_seek_seq = Arc::new(AtomicU64::new(0));
-        let applied_seek_seq_t = applied_seek_seq.clone();
-        let decoded_total = Arc::new(AtomicU64::new(0));
-        let decoded_total_t = decoded_total.clone();
+        let shared = DecodeThreadShared::new();
+        let worker_shared = shared.clone();
 
         let join = std::thread::spawn(move || {
             // 解码器在工作线程内打开, 满足 !Send 约束; 上面已校验过可打开。
-            let mut decoder = match VideoDecoder::open(&owned_path) {
-                Ok(d) => d,
-                Err(_) => return,
-            };
-            let mut eof = false;
-            while !stop_thread.load(Ordering::Relaxed) {
-                // 排空所有待处理 seek 请求, 只保留最后一个并应用一次。
-                let mut pending = None;
-                while let Ok(t) = seek_rx.try_recv() {
-                    pending = Some(t);
-                }
-                if let Some((t, mode)) = pending {
-                    let _ = match mode {
-                        SeekMode::Exact => decoder.seek_ms(t),
-                        SeekMode::KeyframeBackward => decoder.seek_ms_keyframe(t),
-                        SeekMode::KeyframeForward => decoder.seek_ms_keyframe_forward(t),
-                    };
-                    ended_thread.store(false, Ordering::Relaxed);
-                    eof = false;
-                    // 哨兵 u64::MAX = "seek 后尚未出帧"; 首帧落地后才反映 seek 后的落点,
-                    // 否则旧 PTS 会让 seek 闸门误判(尤其向后 seek)。
-                    landing_pts_t.store(u64::MAX, Ordering::Relaxed);
-                    // 标记本批 seek 已应用(取当前请求代次), 之后的帧才带新 serial。
-                    applied_seek_seq_t.store(
-                        requested_seek_seq_t.load(Ordering::Relaxed),
-                        Ordering::Relaxed,
-                    );
-                }
-                if eof {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    continue;
-                }
-                match decoder.next_frame() {
-                    Ok(Some(frame)) => {
-                        ended_thread.store(false, Ordering::Relaxed);
-                        hw_active_t.store(decoder.observed_hardware(), Ordering::Relaxed);
-                        let pts = frame.pts_ms;
-                        let serial = applied_seek_seq_t.load(Ordering::Relaxed);
-                        if tx.send((serial, frame)).is_err() {
-                            break;
-                        }
-                        // 只记录本次 seek 后首个发出的帧 PTS。解码线程可能在 UI 消费前继续前跑，
-                        // 后续帧不能覆盖落点，否则 seek 闸门会对齐到错误的后续位置。
-                        let _ = landing_pts_t.compare_exchange(
-                            u64::MAX,
-                            pts,
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                        );
-                        frame_pending_t.store(true, Ordering::Relaxed);
-                        decoded_total_t.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Ok(None) | Err(_) => {
-                        ended_thread.store(true, Ordering::Relaxed);
-                        eof = true;
-                    }
-                }
+            if let Some(worker) = DecodeWorker::from_path(owned_path, tx, seek_rx, worker_shared) {
+                worker.run();
             }
         });
 
@@ -143,14 +208,14 @@ impl DecodeThread {
             dimensions,
             rx,
             seek_tx,
-            stop,
-            ended,
-            hw_active,
-            frame_pending,
-            landing_pts,
-            requested_seek_seq,
-            applied_seek_seq,
-            decoded_total,
+            stop: shared.stop,
+            ended: shared.ended,
+            hw_active: shared.hw_active,
+            frame_pending: shared.frame_pending,
+            landing_pts: shared.landing_pts,
+            requested_seek_seq: shared.requested_seek_seq,
+            applied_seek_seq: shared.applied_seek_seq,
+            decoded_total: shared.decoded_total,
             join: Some(join),
         })
     }
@@ -197,7 +262,10 @@ impl DecodeThread {
     /// 请求的代次号, 调用方据此配合 applied_seek_seq() 判断该 seek 是否已实际生效。
     pub fn request_seek(&self, ms: u64, mode: SeekMode) -> u64 {
         let seq = self.requested_seek_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.seek_tx.send((ms, mode));
+        let send_result = self.seek_tx.send((ms, mode));
+        if send_result.is_err() {
+            self.ended.store(true, Ordering::Relaxed);
+        }
         seq
     }
 
@@ -243,21 +311,23 @@ impl DecodeThread {
     }
 
     pub fn stop(mut self) {
+        self.finish_thread();
+    }
+
+    fn finish_thread(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         while self.rx.try_recv().is_ok() {}
         if let Some(j) = self.join.take() {
-            let _ = j.join();
+            if j.join().is_err() {
+                eprintln!("解码线程异常退出");
+            }
         }
     }
 }
 
 impl Drop for DecodeThread {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        while self.rx.try_recv().is_ok() {}
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
-        }
+        self.finish_thread();
     }
 }
 

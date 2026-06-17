@@ -1,3 +1,9 @@
+//! Error types returned by media decoders.
+//!
+//! The media crate keeps FFmpeg errors intact where possible, and adds small
+//! domain errors for stream selection, hardware-frame transfer, and dimension
+//! validation so engine callers can choose a fallback path without parsing text.
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]

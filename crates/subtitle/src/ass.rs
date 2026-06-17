@@ -1,3 +1,10 @@
+//! Minimal ASS/SSA subtitle parser.
+//!
+//! The player only needs timed plain text cues, so this parser reads the
+//! `[Events]` section, honors its `Format:` column order, and keeps `Dialogue:`
+//! text after removing inline override tags.  It intentionally does not evaluate
+//! style definitions, positioning, karaoke timing, or drawing commands.
+
 use crate::model::{Cue, Subtitles};
 
 /// 解析 .ass 时间 "H:MM:SS.cc"(centiseconds)为毫秒。
@@ -38,48 +45,83 @@ pub fn parse_ass(input: &str) -> Subtitles {
 
     for line in input.lines() {
         let line = line.trim();
-        if line.starts_with('[') {
-            in_events = line.eq_ignore_ascii_case("[Events]");
+        if update_events_section(line, &mut in_events) {
             continue;
         }
         if !in_events {
             continue;
         }
-        if let Some(rest) = line.strip_prefix("Format:") {
-            format_fields = rest.split(',').map(|s| s.trim().to_lowercase()).collect();
+        if let Some(fields) = parse_format_fields(line) {
+            format_fields = fields;
             continue;
         }
-        if let Some(rest) = line.strip_prefix("Dialogue:") {
-            // 按 Format 字段数切分; Text 是最后一个且可能含逗号 → 限制 splitn
-            let n = format_fields.len().max(10);
-            let parts: Vec<&str> = rest.splitn(n, ',').collect();
-            if parts.len() < n {
-                continue;
-            }
-            let idx = |name: &str| format_fields.iter().position(|f| f == name);
-            let start = idx("start")
-                .and_then(|i| parts.get(i))
-                .and_then(|s| parse_ass_time(s.trim()));
-            let end = idx("end")
-                .and_then(|i| parts.get(i))
-                .and_then(|s| parse_ass_time(s.trim()));
-            let text_idx = idx("text").unwrap_or(parts.len() - 1);
-            let (Some(start_ms), Some(end_ms)) = (start, end) else {
-                continue;
-            };
-            let text = strip_tags(parts.get(text_idx).unwrap_or(&"").trim());
-            if text.is_empty() {
-                continue;
-            }
-            cues.push(Cue {
-                start_ms,
-                end_ms,
-                text,
-            });
+        if let Some(cue) = parse_dialogue_line(line, &format_fields) {
+            cues.push(cue);
         }
     }
     cues.sort_by_key(|c| c.start_ms);
     Subtitles::from_cues(cues)
+}
+
+fn update_events_section(line: &str, in_events: &mut bool) -> bool {
+    if !line.starts_with('[') {
+        return false;
+    }
+    *in_events = line.eq_ignore_ascii_case("[Events]");
+    true
+}
+
+fn parse_format_fields(line: &str) -> Option<Vec<String>> {
+    let rest = line.strip_prefix("Format:")?;
+    Some(rest.split(',').map(|s| s.trim().to_lowercase()).collect())
+}
+
+fn parse_dialogue_line(line: &str, format_fields: &[String]) -> Option<Cue> {
+    let rest = line.strip_prefix("Dialogue:")?;
+    let parts = split_dialogue_parts(rest, format_fields);
+    let start_ms = field_time(format_fields, &parts, "start")?;
+    let end_ms = field_time(format_fields, &parts, "end")?;
+    let text = dialogue_text(format_fields, &parts);
+    if text.is_empty() {
+        return None;
+    }
+    Some(Cue {
+        start_ms,
+        end_ms,
+        text,
+    })
+}
+
+fn split_dialogue_parts<'a>(rest: &'a str, format_fields: &[String]) -> Vec<&'a str> {
+    // 按 Format 字段数切分; Text 是最后一个且可能含逗号 → 限制 splitn
+    let n = format_fields.len().max(10);
+    let parts: Vec<&str> = rest.splitn(n, ',').collect();
+    if parts.len() < n {
+        return Vec::new();
+    }
+    parts
+}
+
+fn field_time(format_fields: &[String], parts: &[&str], name: &str) -> Option<u64> {
+    let index = field_index(format_fields, name)?;
+    let value = parts.get(index)?;
+    parse_ass_time(value.trim())
+}
+
+fn dialogue_text(format_fields: &[String], parts: &[&str]) -> String {
+    let text_idx = match field_index(format_fields, "text") {
+        Some(idx) => idx,
+        None => parts.len().saturating_sub(1),
+    };
+    let text = match parts.get(text_idx) {
+        Some(text) => text.trim(),
+        None => "",
+    };
+    strip_tags(text)
+}
+
+fn field_index(format_fields: &[String], name: &str) -> Option<usize> {
+    format_fields.iter().position(|field| field == name)
 }
 
 #[cfg(test)]

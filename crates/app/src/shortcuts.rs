@@ -1,4 +1,9 @@
-//! 键盘快捷键相关纯函数。
+//! Keyboard shortcut formatting and step helpers.
+//!
+//! These helpers stay free of `PlayerApp` state so both UI tooltips and shortcut
+//! dispatch can share the same platform modifier rules.  Volume and rate snapping
+//! also live here because keyboard handling and on-screen notices need identical
+//! step labels.
 
 use eframe::egui;
 
@@ -10,34 +15,36 @@ pub enum ShortcutPlatform {
     Windows,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Linux,
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[allow(dead_code)]
     Other,
 }
 
+#[cfg(target_os = "macos")]
+const CURRENT_SHORTCUT_PLATFORM: ShortcutPlatform = ShortcutPlatform::Macos;
+#[cfg(target_os = "windows")]
+const CURRENT_SHORTCUT_PLATFORM: ShortcutPlatform = ShortcutPlatform::Windows;
+#[cfg(target_os = "linux")]
+const CURRENT_SHORTCUT_PLATFORM: ShortcutPlatform = ShortcutPlatform::Linux;
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+const CURRENT_SHORTCUT_PLATFORM: ShortcutPlatform = ShortcutPlatform::Other;
+
 impl ShortcutPlatform {
     pub fn current() -> Self {
-        #[cfg(target_os = "macos")]
-        {
-            Self::Macos
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Self::Windows
-        }
-        #[cfg(target_os = "linux")]
-        {
-            Self::Linux
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            Self::Other
-        }
+        // Compile-time cfg keeps tooltip labels aligned with egui's modifier model
+        // for the platform the app was built for.
+        CURRENT_SHORTCUT_PLATFORM
+    }
+
+    fn is_desktop_navigation(self) -> bool {
+        self == Self::Windows || self == Self::Linux
     }
 }
 
 pub fn shortcut_tooltip(label: impl AsRef<str>, shortcut: impl AsRef<str>) -> String {
     let label = label.as_ref();
     let shortcut = shortcut.as_ref().trim();
+    // Empty shortcuts are allowed for controls that have a hover label but no
+    // keyboard equivalent.
     if shortcut.is_empty() {
         label.to_string()
     } else {
@@ -45,22 +52,27 @@ pub fn shortcut_tooltip(label: impl AsRef<str>, shortcut: impl AsRef<str>) -> St
     }
 }
 
-fn command_modifier_label(platform: ShortcutPlatform) -> &'static str {
-    match platform {
-        ShortcutPlatform::Macos => "Cmd",
-        ShortcutPlatform::Windows | ShortcutPlatform::Linux => "Ctrl",
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        ShortcutPlatform::Other => "Cmd/Ctrl",
+fn platform_modifier_label(
+    platform: ShortcutPlatform,
+    macos: &'static str,
+    desktop: &'static str,
+    fallback: &'static str,
+) -> &'static str {
+    if platform == ShortcutPlatform::Macos {
+        macos
+    } else if platform.is_desktop_navigation() {
+        desktop
+    } else {
+        fallback
     }
 }
 
+fn command_modifier_label(platform: ShortcutPlatform) -> &'static str {
+    platform_modifier_label(platform, "Cmd", "Ctrl", "Cmd/Ctrl")
+}
+
 fn navigation_modifier_label(platform: ShortcutPlatform) -> &'static str {
-    match platform {
-        ShortcutPlatform::Macos => "Cmd",
-        ShortcutPlatform::Windows | ShortcutPlatform::Linux => "Alt",
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        ShortcutPlatform::Other => "Cmd/Alt",
-    }
+    platform_modifier_label(platform, "Cmd", "Alt", "Cmd/Alt")
 }
 
 pub fn open_shortcut_label() -> String {
@@ -98,11 +110,10 @@ pub fn rate_shortcut_label() -> String {
 
 /// macOS 使用 Cmd, Windows/Linux 使用 Alt 控制播放列表导航与倍速快捷键。
 pub fn navigation_modifier_pressed(platform: ShortcutPlatform, modifiers: egui::Modifiers) -> bool {
-    match platform {
-        ShortcutPlatform::Macos => modifiers.command,
-        ShortcutPlatform::Windows | ShortcutPlatform::Linux => modifiers.alt,
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        ShortcutPlatform::Other => modifiers.command,
+    if platform.is_desktop_navigation() {
+        modifiers.alt
+    } else {
+        modifiers.command
     }
 }
 
@@ -118,6 +129,8 @@ pub fn snap_volume_down(vol: u8) -> u8 {
 
 /// 倍速上调到菜单中的下一档。
 pub fn snap_rate_up(rate_pct: u16) -> u16 {
+    // Rate steps are shared with the rate popup so keyboard shortcuts never land
+    // on a value the menu cannot display as selected.
     crate::enhance::RATE_OPTIONS
         .iter()
         .copied()
@@ -127,6 +140,8 @@ pub fn snap_rate_up(rate_pct: u16) -> u16 {
 
 /// 倍速下调到菜单中的上一档。
 pub fn snap_rate_down(rate_pct: u16) -> u16 {
+    // Reverse iteration mirrors snap_rate_up while preserving the lower bound from
+    // the configured menu options.
     crate::enhance::RATE_OPTIONS
         .iter()
         .copied()
@@ -136,6 +151,7 @@ pub fn snap_rate_down(rate_pct: u16) -> u16 {
 }
 
 pub fn format_rate_label(rate_pct: u16) -> String {
+    // Notices use compact decimal labels: 1x, 1.5x, 1.25x.
     let whole = rate_pct / 100;
     let frac = rate_pct % 100;
     if frac == 0 {

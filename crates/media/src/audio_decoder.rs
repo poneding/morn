@@ -1,3 +1,15 @@
+//! FFmpeg-backed audio decoding.
+//!
+//! `AudioDecoder` exposes decoded audio as interleaved `f32` stereo chunks with PTS
+//! in milliseconds.  It hides stream selection, codec setup, resampling, and packet
+//! draining so the engine audio thread can focus on clock anchoring and playback-rate
+//! conversion.
+//!
+//! The optional output sample rate is used when wiring the decoder to a real audio
+//! device.  Resampling at decode time keeps normal 1.0x playback on the shortest path
+//! through the ring buffer and avoids adding avoidable latency before the master
+//! audio clock is anchored.
+
 use crate::error::MediaError;
 use crate::frame::AudioChunk;
 use ff::format::sample::{Sample, Type as SampleType};
@@ -19,7 +31,7 @@ pub struct AudioDecoder {
 }
 
 impl AudioDecoder {
-    pub fn open(path: &Path) -> Result<Self, MediaError> {
+    pub fn open_path(path: &Path) -> Result<Self, MediaError> {
         Self::open_inner(path, None)
     }
 
@@ -104,7 +116,8 @@ impl AudioDecoder {
     fn read_audio_packet(&mut self) -> Result<Option<ff::codec::packet::Packet>, MediaError> {
         let mut packet = ff::codec::packet::Packet::empty();
         loop {
-            match packet.read(&mut self.ictx) {
+            let packet_result = packet.read(&mut self.ictx);
+            match packet_result {
                 Ok(()) => {
                     if packet.stream() == self.stream_index {
                         return Ok(Some(packet));

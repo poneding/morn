@@ -1,99 +1,166 @@
+//! Playlist and history panel rendering.
+//!
+//! The panel is intentionally drawn with explicit rectangles for the pieces that
+//! must stay visually aligned: header actions, rows, and per-row remove buttons.
+//! egui's normal layout helpers are still used for text and spacing, but the
+//! clickable row surface owns the full width so hover, selection, drag, and
+//! context-menu hit testing all agree on the same bounds.
+//!
+//! Keep row actions independent from the row label layout.  The filename may be
+//! clipped, the row may be dragged, and the remove affordance may be hidden until
+//! hover, but the right-side action slot must keep a stable square footprint.
+//! This prevents playlist rows from shifting when the pointer enters a row or
+//! when localized text changes width.
+//!
+//! Commands are returned to the app layer instead of executed here.  That keeps
+//! this module limited to immediate-mode UI state and leaves playlist mutation,
+//! file dialogs, and playback side effects in `PlayerApp`/`Player`.
+
 use eframe::egui;
 use player_core::Command;
 use rust_i18n::t;
 
-pub const OPEN_FILE_ICON: &str = "➕";
-pub const CLEAR_ALL_ICON: &str = "🗑";
 pub const PLAYLIST_MIN_WIDTH: f32 = 220.0;
-const ROW_CORNER_RADIUS: u8 = 6;
-const ROW_EXTRA_HEIGHT: f32 = 4.0;
-const ROW_TEXT_PADDING_X: f32 = 4.0;
-const ROW_ACTION_MARGIN: f32 = 4.0;
-const REMOVE_ICON_STROKE_WIDTH: f32 = 1.5;
-const REMOVE_ICON_INSET_FACTOR: f32 = 0.25;
+const ROW_CORNER_RADIUS: u8 = crate::visuals::CONTROL_CORNER_RADIUS;
+const ROW_EXTRA_HEIGHT: f32 = 10.0;
+const ROW_TEXT_PADDING_X: f32 = crate::visuals::FLOATING_PANEL_INNER_MARGIN_Y as f32;
+const ROW_ACTION_MARGIN: f32 = crate::visuals::FLOATING_PANEL_MARGIN;
+const REMOVE_BUTTON_SIZE: f32 = 22.0;
+const REMOVE_ICON_STROKE_WIDTH: f32 = 1.35;
+const REMOVE_ICON_INSET_FACTOR: f32 = 0.19;
+const HEADER_ACTION_BUTTON_SIZE: f32 = crate::visuals::ICON_BUTTON_SIZE;
+const HEADER_ACTION_BG_SIZE: f32 = 26.0;
+const HEADER_ACTION_ICON_STROKE_WIDTH: f32 = 1.55;
+const HEADER_ACTION_PLUS_SIZE: f32 = 10.0;
+const HEADER_ACTION_TRASH_BODY_WIDTH: f32 = 8.0;
+const HEADER_ACTION_TRASH_BODY_HEIGHT: f32 = 8.5;
+const HEADER_ACTION_TRASH_BODY_Y_OFFSET: f32 = 1.5;
+const HEADER_ACTION_TRASH_LID_WIDTH: f32 = 12.0;
+const HEADER_ACTION_TRASH_LID_Y_OFFSET: f32 = 4.5;
+const HEADER_ACTION_TRASH_HANDLE_WIDTH: f32 = 4.0;
+const HEADER_ACTION_TRASH_HANDLE_Y_OFFSET: f32 = 7.5;
 
-fn icon_button_size(ui: &egui::Ui, icon: &str) -> egui::Vec2 {
-    let text_width = ui
-        .painter()
-        .layout_no_wrap(
-            icon.to_owned(),
-            egui::TextStyle::Button.resolve(ui.style()),
-            ui.visuals().text_color(),
-        )
-        .size()
-        .x;
-    egui::vec2(
-        text_width + ui.spacing().button_padding.x * 2.0,
-        ui.spacing().interact_size.y,
-    )
+#[derive(Clone, Copy)]
+enum HeaderActionIcon {
+    AddFile,
+    ClearList,
 }
 
-fn adaptive_icon_button(ui: &egui::Ui, icon: &'static str) -> egui::Button<'static> {
-    egui::Button::new(icon).min_size(icon_button_size(ui, icon))
+fn header_icon_button_size(_ui: &egui::Ui) -> egui::Vec2 {
+    egui::Vec2::splat(HEADER_ACTION_BUTTON_SIZE)
 }
 
-fn centered_icon_button_at(
+fn header_action_button_at(
     ui: &mut egui::Ui,
     rect: egui::Rect,
-    icon: &str,
-    color: egui::Color32,
+    icon: HeaderActionIcon,
 ) -> egui::Response {
+    // Header actions are positioned by the sidebar header, so this draws a button
+    // directly into the caller-provided rectangle instead of asking layout to
+    // allocate another cell.
     let response = ui.allocate_rect(rect, egui::Sense::click());
     if ui.is_rect_visible(rect) {
-        let visuals = ui.style().interact(&response);
-        ui.painter()
-            .rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
-        ui.painter().rect_stroke(
-            rect,
-            visuals.corner_radius,
-            visuals.bg_stroke,
-            egui::StrokeKind::Inside,
-        );
-
-        let galley = ui.painter().layout_no_wrap(
-            icon.to_owned(),
-            egui::TextStyle::Button.resolve(ui.style()),
-            color,
-        );
-        let text_pos = egui::pos2(
-            rect.center().x - galley.size().x * 0.5,
-            rect.center().y - galley.size().y * 0.5,
-        );
-        ui.painter().galley(text_pos, galley, color);
+        paint_header_action_button(ui, rect, icon, &response);
     }
     response
 }
 
+fn paint_header_action_button(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    icon: HeaderActionIcon,
+    response: &egui::Response,
+) {
+    let visuals = ui.style().interact(response);
+    let bg_rect = egui::Rect::from_center_size(
+        rect.center(),
+        egui::Vec2::splat(HEADER_ACTION_BG_SIZE.min(rect.width().min(rect.height()))),
+    );
+    if response.hovered() || response.is_pointer_button_down_on() {
+        let radius = (bg_rect.width() * 0.5).round() as u8;
+        ui.painter().rect_filled(
+            bg_rect,
+            egui::CornerRadius::same(radius),
+            visuals.weak_bg_fill,
+        );
+    }
+    let stroke = egui::Stroke::new(HEADER_ACTION_ICON_STROKE_WIDTH, visuals.fg_stroke.color);
+    match icon {
+        HeaderActionIcon::AddFile => paint_header_add_icon(ui, rect.center(), stroke),
+        HeaderActionIcon::ClearList => paint_header_trash_icon(ui, rect.center(), stroke),
+    }
+}
+
+fn paint_header_add_icon(ui: &egui::Ui, center: egui::Pos2, stroke: egui::Stroke) {
+    let center = egui::pos2(center.x.round(), center.y.round());
+    let half = HEADER_ACTION_PLUS_SIZE * 0.5;
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x - half, center.y),
+            egui::pos2(center.x + half, center.y),
+        ],
+        stroke,
+    );
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x, center.y - half),
+            egui::pos2(center.x, center.y + half),
+        ],
+        stroke,
+    );
+}
+
+fn paint_header_trash_icon(ui: &egui::Ui, center: egui::Pos2, stroke: egui::Stroke) {
+    let body = egui::Rect::from_center_size(
+        egui::pos2(
+            center.x.round(),
+            (center.y + HEADER_ACTION_TRASH_BODY_Y_OFFSET).round(),
+        ),
+        egui::vec2(
+            HEADER_ACTION_TRASH_BODY_WIDTH,
+            HEADER_ACTION_TRASH_BODY_HEIGHT,
+        ),
+    );
+    let lid_y = (center.y - HEADER_ACTION_TRASH_LID_Y_OFFSET).round();
+    let handle_y = (center.y - HEADER_ACTION_TRASH_HANDLE_Y_OFFSET).round();
+
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x - HEADER_ACTION_TRASH_LID_WIDTH * 0.5, lid_y),
+            egui::pos2(center.x + HEADER_ACTION_TRASH_LID_WIDTH * 0.5, lid_y),
+        ],
+        stroke,
+    );
+    ui.painter()
+        .line_segment([body.left_top(), body.left_bottom()], stroke);
+    ui.painter()
+        .line_segment([body.right_top(), body.right_bottom()], stroke);
+    ui.painter()
+        .line_segment([body.left_bottom(), body.right_bottom()], stroke);
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x - HEADER_ACTION_TRASH_HANDLE_WIDTH * 0.5, handle_y),
+            egui::pos2(center.x + HEADER_ACTION_TRASH_HANDLE_WIDTH * 0.5, handle_y),
+        ],
+        stroke,
+    );
+}
+
 pub fn open_file_button_size(ui: &egui::Ui) -> egui::Vec2 {
-    icon_button_size(ui, OPEN_FILE_ICON)
+    header_icon_button_size(ui)
 }
 
 pub fn clear_all_button_size(ui: &egui::Ui) -> egui::Vec2 {
-    icon_button_size(ui, CLEAR_ALL_ICON)
-}
-
-pub fn open_file_button(ui: &mut egui::Ui) -> Vec<Command> {
-    let mut cmds = Vec::new();
-    let button_response = ui
-        .add(adaptive_icon_button(ui, OPEN_FILE_ICON))
-        .on_hover_text(crate::shortcuts::shortcut_tooltip(
-            t!("open_file"),
-            crate::shortcuts::open_shortcut_label(),
-        ));
-    if button_response.clicked() {
-        cmds.push(Command::OpenDialog);
-    }
-    cmds
+    header_icon_button_size(ui)
 }
 
 pub fn open_file_button_at(ui: &mut egui::Ui, rect: egui::Rect) -> Vec<Command> {
     let mut cmds = Vec::new();
-    let button_response = ui
-        .put(rect, adaptive_icon_button(ui, OPEN_FILE_ICON))
-        .on_hover_text(crate::shortcuts::shortcut_tooltip(
-            t!("open_file"),
-            crate::shortcuts::open_shortcut_label(),
-        ));
+    let response = header_action_button_at(ui, rect, HeaderActionIcon::AddFile);
+    let button_response = response.on_hover_text(crate::shortcuts::shortcut_tooltip(
+        t!("open_file"),
+        crate::shortcuts::open_shortcut_label(),
+    ));
     if button_response.clicked() {
         cmds.push(Command::OpenDialog);
     }
@@ -108,10 +175,10 @@ pub fn clear_all_button_at(
 ) -> Vec<Command> {
     let mut cmds = Vec::new();
     let response = if enabled {
-        centered_icon_button_at(ui, rect, CLEAR_ALL_ICON, ui.visuals().text_color())
+        header_action_button_at(ui, rect, HeaderActionIcon::ClearList)
     } else {
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect).disabled(), |ui| {
-            centered_icon_button_at(ui, rect, CLEAR_ALL_ICON, ui.visuals().weak_text_color())
+            header_action_button_at(ui, rect, HeaderActionIcon::ClearList)
         })
         .inner
     }
@@ -148,6 +215,8 @@ fn remove_button_at(
     remove_id: egui::Id,
     visible: bool,
 ) -> egui::Response {
+    // The remove target is always interactable, but it is only painted on hover.
+    // Keeping the hit box stable avoids row text shifting when the icon appears.
     let response = ui
         .interact(rect, remove_id, egui::Sense::click())
         .on_hover_text(crate::shortcuts::shortcut_tooltip(
@@ -156,31 +225,40 @@ fn remove_button_at(
         ));
     if visible && ui.is_rect_visible(rect) {
         let visuals = ui.style().interact(&response);
-        ui.painter()
-            .rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+        let button_size = rect.width().min(rect.height()).min(REMOVE_BUTTON_SIZE);
+        let button_rect =
+            egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(button_size));
+        let radius = (button_size * 0.5).round() as u8;
+        ui.painter().rect_filled(
+            button_rect,
+            egui::CornerRadius::same(radius),
+            visuals.weak_bg_fill,
+        );
         ui.painter().rect_stroke(
-            rect,
-            visuals.corner_radius,
+            button_rect,
+            egui::CornerRadius::same(radius),
             visuals.bg_stroke,
             egui::StrokeKind::Inside,
         );
-        paint_centered_x_icon(ui, rect, ui.visuals().error_fg_color);
+        paint_centered_x_icon(ui, button_rect, ui.visuals().error_fg_color);
     }
     response
 }
 
 fn row_action_button_size(row_height: f32) -> egui::Vec2 {
+    // The action slot derives from row height so touch targets scale with egui's
+    // configured interaction size.
     let size = (row_height - ROW_ACTION_MARGIN * 2.0).max(0.0);
     egui::vec2(size, size)
 }
 
-fn row_actions_at(
-    ui: &mut egui::Ui,
-    row_rect: egui::Rect,
-    remove_id: egui::Id,
-    visible: bool,
-    remove_cmd: Command,
-) -> (Vec<Command>, bool) {
+fn row_actions_at(ui: &mut egui::Ui, input: RowActionInput) -> (Vec<Command>, bool) {
+    let RowActionInput {
+        row_rect,
+        remove_id,
+        visible,
+        remove_cmd,
+    } = input;
     let mut cmds = Vec::new();
     let remove_size = row_action_button_size(row_rect.height());
     let remove_rect = egui::Rect::from_min_max(
@@ -212,27 +290,52 @@ fn row_fill(
     current: bool,
     candidate: bool,
 ) -> Option<egui::Color32> {
+    // Current playback gets the strong selection color; keyboard candidates and
+    // hover use the weaker fill so they read as previews, not active media.
     if current {
         Some(ui.visuals().selection.bg_fill)
-    } else if candidate || response.hovered() {
+    } else if candidate || response.hovered() || response.contains_pointer() {
         Some(ui.visuals().widgets.hovered.weak_bg_fill)
     } else {
         None
     }
 }
 
-fn paint_row_title(ui: &egui::Ui, rect: egui::Rect, title: &str, color: egui::Color32) {
-    let galley = egui::WidgetText::from(title.to_owned()).into_galley(
+struct RowTitlePaint<'a> {
+    rect: egui::Rect,
+    title: &'a str,
+    color: egui::Color32,
+    strong: bool,
+}
+
+fn paint_row_title(ui: &egui::Ui, input: RowTitlePaint<'_>) {
+    // Titles are painted manually because the row has a fixed action gutter and
+    // should truncate instead of reflowing under the remove button.  The current
+    // track is bolded so the now-playing row reads as the anchor of the list.
+    let galley = egui::WidgetText::from(row_title_text(input.title, input.strong)).into_galley(
         ui,
         Some(egui::TextWrapMode::Truncate),
-        rect.width().max(0.0),
+        input.rect.width().max(0.0),
         egui::TextStyle::Body,
     );
-    let text_pos = egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5);
-    ui.painter().galley(text_pos, galley, color);
+    let text_pos = egui::pos2(
+        input.rect.left(),
+        input.rect.center().y - galley.size().y * 0.5,
+    );
+    ui.painter().galley(text_pos, galley, input.color);
+}
+
+fn row_title_text(title: &str, strong: bool) -> egui::RichText {
+    if strong {
+        egui::RichText::new(title).strong()
+    } else {
+        egui::RichText::new(title)
+    }
 }
 
 fn sidebar_scroll_area<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    // The sidebar owns its width; disabling horizontal auto-shrink prevents long
+    // filenames from changing the overlay size.
     egui::ScrollArea::vertical()
         .max_width(ui.available_width())
         .max_height(ui.available_height())
@@ -245,6 +348,9 @@ fn sidebar_scroll_area<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui
 }
 
 struct PlaylistRow<'a> {
+    // Row identity and visual state are passed in explicitly so playlist and
+    // history rows can share the same painter without deriving behavior from
+    // command variants or path equality.
     current: bool,
     candidate: bool,
     title: &'a str,
@@ -254,6 +360,13 @@ struct PlaylistRow<'a> {
     play_cmd: Command,
     remove_cmd: Command,
     delete_cmd: Command,
+}
+
+struct RowActionInput {
+    row_rect: egui::Rect,
+    remove_id: egui::Id,
+    visible: bool,
+    remove_cmd: Command,
 }
 
 fn playlist_row(ui: &mut egui::Ui, row: PlaylistRow<'_>) -> Vec<Command> {
@@ -277,6 +390,8 @@ fn playlist_row(ui: &mut egui::Ui, row: PlaylistRow<'_>) -> Vec<Command> {
     let row_response = row_response.on_hover_text(tooltip);
     let show_actions = row_response.hovered() || row_response.contains_pointer();
 
+    // Painting is separated from input collection so the row can remain a single
+    // click target while the remove button consumes its own click.
     if let Some(fill) = row_fill(ui, &row_response, current, candidate) {
         ui.painter().rect_filled(row_rect, ROW_CORNER_RADIUS, fill);
     }
@@ -294,38 +409,78 @@ fn playlist_row(ui: &mut egui::Ui, row: PlaylistRow<'_>) -> Vec<Command> {
     } else {
         ui.visuals().text_color()
     };
-    paint_row_title(ui, text_rect, title, text_color);
+    paint_row_title(
+        ui,
+        RowTitlePaint {
+            rect: text_rect,
+            title,
+            color: text_color,
+            strong: current,
+        },
+    );
 
-    let (action_cmds, remove_clicked) =
-        row_actions_at(ui, row_rect, remove_id, show_actions, remove_cmd);
+    let (action_cmds, remove_clicked) = row_actions_at(
+        ui,
+        RowActionInput {
+            row_rect,
+            remove_id,
+            visible: show_actions,
+            remove_cmd,
+        },
+    );
 
     if row_response.clicked() && !remove_clicked {
         cmds.push(play_cmd);
     }
+    cmds.extend(playlist_row_context_commands(
+        row_response,
+        path,
+        &delete_cmd,
+    ));
+    cmds.extend(action_cmds);
+    cmds
+}
+
+fn playlist_row_context_commands(
+    row_response: egui::Response,
+    path: &std::path::Path,
+    delete_cmd: &Command,
+) -> Vec<Command> {
+    // Context-menu commands are appended after row/remove clicks.  The app layer
+    // still serializes command execution, so a menu action cannot mutate the list
+    // while this row is being painted.
+    let mut cmds = Vec::new();
     if let Some(menu) = egui::Popup::context_menu(&row_response)
-        .style(crate::visuals::frosted_popup_style())
-        .show(|ui| {
-            let mut selected = Vec::new();
-            let path = path.to_path_buf();
-            if ui.button(t!("reveal_file").to_string()).clicked() {
-                selected.push(Command::RevealFile(path.clone()));
-                ui.close();
-            }
-            if ui.button(t!("open_sibling_videos").to_string()).clicked() {
-                selected.push(Command::OpenSiblingVideos(path.clone()));
-                ui.close();
-            }
-            if ui.button(t!("delete_file").to_string()).clicked() {
-                selected.push(delete_cmd);
-                ui.close();
-            }
-            selected
-        })
+        .style(crate::visuals::panel_popup_style())
+        .show(|ui| playlist_row_context_menu(ui, path, delete_cmd))
     {
         cmds.extend(menu.inner);
     }
-    cmds.extend(action_cmds);
     cmds
+}
+
+fn playlist_row_context_menu(
+    ui: &mut egui::Ui,
+    path: &std::path::Path,
+    delete_cmd: &Command,
+) -> Vec<Command> {
+    // Clone the path once for menu actions so each branch can return an owned
+    // command without borrowing from egui's popup closure.
+    let mut selected = Vec::new();
+    let path = path.to_path_buf();
+    if ui.button(t!("reveal_file").to_string()).clicked() {
+        selected.push(Command::RevealFile(path.clone()));
+        let _closed = ui.close();
+    }
+    if ui.button(t!("open_sibling_videos").to_string()).clicked() {
+        selected.push(Command::OpenSiblingVideos(path.clone()));
+        let _closed = ui.close();
+    }
+    if ui.button(t!("delete_file").to_string()).clicked() {
+        selected.push(delete_cmd.clone());
+        let _closed = ui.close();
+    }
+    selected
 }
 
 /// 绘制左侧播放列表, 返回点击产生的命令。
@@ -335,28 +490,37 @@ pub fn playlist_panel(
     current: Option<usize>,
     candidate: Option<usize>,
 ) -> Vec<Command> {
+    sidebar_scroll_area(ui, |ui| playlist_commands(ui, paths, current, candidate))
+}
+
+fn playlist_commands(
+    ui: &mut egui::Ui,
+    paths: &[std::path::PathBuf],
+    current: Option<usize>,
+    candidate: Option<usize>,
+) -> Vec<Command> {
+    // Playlist rows use indices for commands because the engine owns cursor
+    // normalization after removals and deletions.
     let mut cmds = Vec::new();
-    sidebar_scroll_area(ui, |ui| {
-        for (i, p) in paths.iter().enumerate() {
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-            let is_current = current == Some(i);
-            let is_candidate = candidate == Some(i);
-            cmds.extend(playlist_row(
-                ui,
-                PlaylistRow {
-                    current: is_current,
-                    candidate: is_candidate,
-                    title: name,
-                    path: p,
-                    tooltip: p.to_string_lossy().to_string(),
-                    remove_id: ui.make_persistent_id(("playlist_remove", i)),
-                    play_cmd: Command::PlayIndex(i),
-                    remove_cmd: Command::RemovePlaylistIndex(i),
-                    delete_cmd: Command::DeletePlaylistFileIndex(i),
-                },
-            ));
-        }
-    });
+    for (i, p) in paths.iter().enumerate() {
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        let is_current = current == Some(i);
+        let is_candidate = candidate == Some(i);
+        cmds.extend(playlist_row(
+            ui,
+            PlaylistRow {
+                current: is_current,
+                candidate: is_candidate,
+                title: name,
+                path: p,
+                tooltip: p.to_string_lossy().to_string(),
+                remove_id: ui.make_persistent_id(("playlist_remove", i)),
+                play_cmd: Command::PlayIndex(i),
+                remove_cmd: Command::RemovePlaylistIndex(i),
+                delete_cmd: Command::DeletePlaylistFileIndex(i),
+            },
+        ));
+    }
     cmds
 }
 
@@ -366,79 +530,105 @@ pub fn history_panel(
     paths: &[std::path::PathBuf],
     candidate: Option<usize>,
 ) -> Vec<Command> {
+    sidebar_scroll_area(ui, |ui| history_commands(ui, paths, candidate))
+}
+
+fn history_commands(
+    ui: &mut egui::Ui,
+    paths: &[std::path::PathBuf],
+    candidate: Option<usize>,
+) -> Vec<Command> {
+    // History rows open by path, but remove/delete by index to match the persisted
+    // history ordering shown to the user in this frame.
     let mut cmds = Vec::new();
-    sidebar_scroll_area(ui, |ui| {
-        for (i, p) in paths.iter().enumerate() {
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-            cmds.extend(playlist_row(
-                ui,
-                PlaylistRow {
-                    current: false,
-                    candidate: candidate == Some(i),
-                    title: name,
-                    path: p,
-                    tooltip: p.to_string_lossy().to_string(),
-                    remove_id: ui.make_persistent_id(("history_remove", i)),
-                    play_cmd: Command::Open(p.clone()),
-                    remove_cmd: Command::RemoveHistoryIndex(i),
-                    delete_cmd: Command::DeleteHistoryFileIndex(i),
-                },
-            ));
-        }
-    });
+    for (i, p) in paths.iter().enumerate() {
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        cmds.extend(playlist_row(
+            ui,
+            PlaylistRow {
+                current: false,
+                candidate: candidate == Some(i),
+                title: name,
+                path: p,
+                tooltip: p.to_string_lossy().to_string(),
+                remove_id: ui.make_persistent_id(("history_remove", i)),
+                play_cmd: Command::Open(p.clone()),
+                remove_cmd: Command::RemoveHistoryIndex(i),
+                delete_cmd: Command::DeleteHistoryFileIndex(i),
+            },
+        ));
+    }
     cmds
 }
 
 #[cfg(test)]
 mod tests {
+    fn source_before_tests() -> &'static str {
+        include_str!("playlist_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default()
+    }
+
+    fn source_before(marker: &str) -> &'static str {
+        include_str!("playlist_panel.rs")
+            .split(marker)
+            .next()
+            .unwrap_or_default()
+    }
+
+    fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        source
+            .split(start)
+            .nth(1)
+            .unwrap_or_default()
+            .split(end)
+            .next()
+            .unwrap_or_default()
+    }
+
     #[test]
     fn open_file_entry_is_a_single_default_sized_button() {
-        assert_eq!(super::OPEN_FILE_ICON, "➕");
-
-        let source = include_str!("playlist_panel.rs")
-            .split("fn remove_button_at")
-            .next()
-            .unwrap();
+        let source = source_before("fn remove_button_at");
         assert!(!source.contains("menu_button(\"+\")"));
         assert!(!source.contains("OPEN_MENU"));
         assert!(!source.contains("MenuButton"));
         assert!(!source.contains("OpenFolder"));
-        assert!(source.contains("adaptive_icon_button"));
+        assert!(source.contains("HeaderActionIcon::AddFile"));
+        assert!(source.contains("paint_header_add_icon"));
         assert!(source.contains("Command::OpenDialog"));
     }
 
     #[test]
-    fn icon_buttons_use_content_width_and_stable_height() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+    fn header_action_buttons_use_clean_ghost_icons() {
+        let source = source_before_tests();
 
-        assert!(source.contains("fn adaptive_icon_button"));
-        assert!(source.contains("min_size(icon_button_size(ui, icon))"));
-        assert!(source.contains("fn icon_button_size"));
-        assert!(source.contains("layout_no_wrap"));
-        assert!(source.contains("ui.spacing().button_padding.x * 2.0"));
+        assert!(source.contains("fn header_icon_button_size"));
+        assert!(source.contains("HEADER_ACTION_BUTTON_SIZE"));
+        assert!(source.contains("egui::Vec2::splat(HEADER_ACTION_BUTTON_SIZE)"));
         assert!(source.contains("open_file_button_size"));
         assert!(source.contains("clear_all_button_size"));
+        assert!(source.contains("enum HeaderActionIcon"));
+        assert!(source.contains("const HEADER_ACTION_BG_SIZE: f32 = 26.0"));
+        assert!(source.contains("const HEADER_ACTION_ICON_STROKE_WIDTH: f32 = 1.55"));
+        assert!(source.contains("paint_header_add_icon"));
+        assert!(source.contains("paint_header_trash_icon"));
+        assert!(source.contains("response.hovered() || response.is_pointer_button_down_on()"));
+        assert!(!source.contains("paint_header_clear_list_icon"));
+        assert!(!source.contains("fn adaptive_icon_button"));
+        assert!(!source.contains("fn icon_button_size"));
     }
 
     #[test]
     fn playlist_items_are_single_line_truncated() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
         assert!(source.contains("egui::TextWrapMode::Truncate"));
         assert!(source.contains("rect.width().max(0.0)"));
     }
 
     #[test]
     fn playlist_items_use_fixed_rect_rows_instead_of_buttons() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
         assert!(source.contains("allocate_exact_size(egui::vec2(row_width, row_height)"));
         assert!(source.contains("paint_row_title"));
@@ -448,10 +638,7 @@ mod tests {
 
     #[test]
     fn playlist_panel_does_not_duplicate_bottom_navigation_controls() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
         for removed in [
             concat!("Command", "::", "Prev"),
@@ -466,10 +653,7 @@ mod tests {
 
     #[test]
     fn playlist_panel_accepts_keyboard_candidate_selection() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
         assert!(source.contains("candidate: Option<usize>"));
         assert!(source.contains("let is_current = current == Some(i)"));
@@ -479,22 +663,14 @@ mod tests {
 
     #[test]
     fn playlist_uses_blue_only_for_current_and_gray_for_candidate_or_hover() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
-        let row_fill_source = source
-            .split("fn row_fill")
-            .nth(1)
-            .unwrap()
-            .split("fn paint_row_title")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
+        let row_fill_source = source_section(source, "fn row_fill", "fn paint_row_title");
 
         assert!(row_fill_source.contains("current: bool"));
         assert!(row_fill_source.contains("candidate: bool"));
         assert!(row_fill_source.contains("if current"));
-        assert!(row_fill_source.contains("candidate || response.hovered()"));
+        assert!(row_fill_source
+            .contains("candidate || response.hovered() || response.contains_pointer()"));
         assert!(row_fill_source.contains("ui.visuals().widgets.hovered.weak_bg_fill"));
         assert!(source.contains("let text_color = if current"));
         assert!(!source.contains("let text_color = if selected"));
@@ -502,11 +678,13 @@ mod tests {
 
     #[test]
     fn playlist_and_history_panels_expose_remove_and_clear_commands() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
-        let app_source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+        let source = source_before_tests();
+        let app_source = [
+            include_str!("app.rs"),
+            include_str!("app_ui.rs"),
+            include_str!("app_sidebar_ui.rs"),
+        ]
+        .join("\n");
 
         assert!(source.contains("Command::RemovePlaylistIndex(i)"));
         assert!(source.contains("Command::RemoveHistoryIndex(i)"));
@@ -518,20 +696,18 @@ mod tests {
 
     #[test]
     fn playlist_row_actions_only_paint_remove_on_hover() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
         assert!(source.contains("row_response.hovered()"));
         assert!(source.contains("row_actions_at"));
         assert!(source.contains("visible && ui.is_rect_visible(rect)"));
-        assert!(source.contains("paint_centered_x_icon(ui, rect, ui.visuals().error_fg_color)"));
+        assert!(
+            source.contains("paint_centered_x_icon(ui, button_rect, ui.visuals().error_fg_color)")
+        );
         assert!(source.contains("ui.visuals().error_fg_color"));
         assert!(source.contains("row_actions_width(row_height) + ROW_TEXT_PADDING_X"));
-        assert!(
-            source.contains("row_actions_at(ui, row_rect, remove_id, show_actions, remove_cmd)")
-        );
+        assert!(source.contains("RowActionInput"));
+        assert!(source.contains("visible: show_actions"));
         assert!(!source.contains("ui.add_space(actions_width)"));
         assert!(!source.contains("MenuButton::from_button"));
         assert!(!source.contains("MORE_ACTIONS_ICON"));
@@ -541,12 +717,11 @@ mod tests {
 
     #[test]
     fn playlist_remove_button_is_square_inset_and_does_not_shift_text_on_hover() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
-        assert!(source.contains("const ROW_ACTION_MARGIN: f32 = 4.0"));
+        assert!(
+            source.contains("const ROW_ACTION_MARGIN: f32 = crate::visuals::FLOATING_PANEL_MARGIN")
+        );
         assert!(source.contains("fn row_action_button_size(row_height: f32) -> egui::Vec2"));
         assert!(source.contains("egui::vec2(size, size)"));
         assert!(source.contains("row_rect.top() + ROW_ACTION_MARGIN"));
@@ -558,38 +733,25 @@ mod tests {
 
     #[test]
     fn playlist_remove_button_draws_centered_x_without_text_glyph() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
+        assert!(source.contains("const REMOVE_BUTTON_SIZE: f32 = 22.0"));
+        assert!(source.contains("button_size"));
+        assert!(source.contains("button_rect"));
+        assert!(source.contains("egui::CornerRadius::same(radius)"));
         assert!(source.contains("fn paint_centered_x_icon"));
         assert!(source.contains("line_segment"));
-        assert!(source.contains("const REMOVE_ICON_STROKE_WIDTH: f32 = 1.5"));
-        assert!(source.contains("const REMOVE_ICON_INSET_FACTOR: f32 = 0.25"));
+        assert!(source.contains("const REMOVE_ICON_STROKE_WIDTH: f32 = 1.35"));
+        assert!(source.contains("const REMOVE_ICON_INSET_FACTOR: f32 = 0.19"));
         assert!(!source.contains("centered_icon_button_at(ui, rect, REMOVE_ICON"));
     }
 
     #[test]
     fn playlist_remove_action_does_not_allocate_extra_layout_on_hover() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
-        let action_source = source
-            .split("fn row_actions_at")
-            .nth(1)
-            .unwrap()
-            .split("fn row_actions_width")
-            .next()
-            .unwrap();
-        let remove_button_source = source
-            .split("fn remove_button_at")
-            .nth(1)
-            .unwrap()
-            .split("fn row_action_button_size")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
+        let action_source = source_section(source, "fn row_actions_at", "fn row_actions_width");
+        let remove_button_source =
+            source_section(source, "fn remove_button_at", "fn row_action_button_size");
 
         assert!(remove_button_source.contains(".interact("));
         assert!(action_source.contains("remove_id"));
@@ -599,14 +761,15 @@ mod tests {
 
     #[test]
     fn playlist_rows_use_rounded_fill_extra_height_and_tighter_padding() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
-        assert!(source.contains("const ROW_TEXT_PADDING_X: f32 = 4.0"));
-        assert!(source.contains("const ROW_EXTRA_HEIGHT: f32 = 4.0"));
-        assert!(source.contains("const ROW_CORNER_RADIUS: u8 = 6"));
+        assert!(source.contains(
+            "const ROW_TEXT_PADDING_X: f32 = crate::visuals::FLOATING_PANEL_INNER_MARGIN_Y as f32"
+        ));
+        assert!(source.contains("const ROW_EXTRA_HEIGHT: f32 = 10.0"));
+        assert!(
+            source.contains("const ROW_CORNER_RADIUS: u8 = crate::visuals::CONTROL_CORNER_RADIUS")
+        );
         assert!(source.contains("let row_height = row_height + ROW_EXTRA_HEIGHT"));
         assert!(source.contains("rect_filled(row_rect, ROW_CORNER_RADIUS, fill)"));
         assert!(source.contains("row_rect.top() + ROW_ACTION_MARGIN"));
@@ -615,13 +778,10 @@ mod tests {
 
     #[test]
     fn playlist_rows_expose_file_actions_in_context_menu() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
         assert!(source.contains("egui::Popup::context_menu(&row_response)"));
-        assert!(source.contains("frosted_popup_style"));
+        assert!(source.contains("panel_popup_style"));
         assert!(source.contains("t!(\"reveal_file\")"));
         assert!(source.contains("Command::RevealFile(path.clone())"));
         assert!(source.contains("t!(\"open_sibling_videos\")"));
@@ -633,29 +793,28 @@ mod tests {
 
     #[test]
     fn clear_all_action_lives_in_header_and_disables_without_items() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
-        let app_source = include_str!("app.rs").split("#[cfg(test)]").next().unwrap();
+        let source = source_before_tests();
+        let app_source = [
+            include_str!("app.rs"),
+            include_str!("app_ui.rs"),
+            include_str!("app_sidebar_ui.rs"),
+        ]
+        .join("\n");
 
         assert!(!source.contains("clear_all_toolbar"));
         assert!(!source.contains("Layout::right_to_left(egui::Align::Center)"));
         assert!(source.contains("clear_all_button_at"));
         assert!(source.contains("egui::UiBuilder::new().max_rect(rect).disabled()"));
         assert!(app_source.contains("clear_all_button_at"));
-        assert!(app_source.contains("!playlist_paths.is_empty()"));
-        assert!(app_source.contains("!hist.is_empty()"));
+        assert!(app_source.contains("!data.playlist_paths.is_empty()"));
+        assert!(app_source.contains("!data.history.is_empty()"));
     }
 
     #[test]
     fn open_entry_only_exposes_file_dialog() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
-        assert!(source.contains("OPEN_FILE_ICON"));
+        assert!(source.contains("HeaderActionIcon::AddFile"));
         assert!(source.contains("Command::OpenDialog"));
         assert!(source.contains("shortcut_tooltip"));
         assert!(source.contains("t!(\"open_file\")"));
@@ -666,10 +825,7 @@ mod tests {
 
     #[test]
     fn sidebar_scroll_area_fills_fixed_panel_instead_of_content_height() {
-        let source = include_str!("playlist_panel.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
+        let source = source_before_tests();
 
         assert!(source.contains("fn sidebar_scroll_area"));
         assert!(source.contains(".max_width(ui.available_width())"));

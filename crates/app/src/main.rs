@@ -3,6 +3,21 @@
     windows_subsystem = "windows"
 )]
 
+//! Desktop entry point for Morn.
+//!
+//! Startup does only process-level setup: platform metadata, initial window sizing,
+//! renderer selection, icon loading, and `PlayerApp` construction.  Playback state
+//! restoration stays in the engine/app layers; this file only peeks at restored media
+//! dimensions so the first window can open at a useful size before egui starts.
+//!
+//! The sizing probe is deliberately optional.  If preferences are absent, the stored
+//! playlist entry is invalid, or decoding metadata fails, startup falls back to the
+//! fixed default inner size instead of delaying or failing the app launch.
+//!
+//! Native window options are assembled here rather than inside `PlayerApp` because
+//! they are process-level choices: renderer backend, decorations, icon, title, and
+//! minimum size must exist before the egui app state is created.
+
 mod app;
 mod controls;
 mod enhance;
@@ -13,6 +28,8 @@ mod playlist_panel;
 mod settings;
 mod shortcuts;
 mod subtitle_overlay;
+mod theme;
+mod titlebar;
 mod updater;
 mod video_view;
 mod visuals;
@@ -28,13 +45,7 @@ fn main() -> eframe::Result {
 
     let initial_inner_size = startup_window_size();
     let native_options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size(initial_inner_size)
-            .with_min_inner_size([APP_MIN_WIDTH, APP_MIN_HEIGHT])
-            .with_title("Morn")
-            .with_decorations(true)
-            .with_transparent(false)
-            .with_icon(app_icon()),
+        viewport: app_viewport(initial_inner_size).with_icon(app_icon()),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
@@ -43,6 +54,36 @@ fn main() -> eframe::Result {
         native_options,
         Box::new(|cc| Ok(Box::new(PlayerApp::new(cc)))),
     )
+}
+
+fn app_viewport(initial_inner_size: [f32; 2]) -> eframe::egui::ViewportBuilder {
+    let viewport = eframe::egui::ViewportBuilder::default()
+        .with_inner_size(initial_inner_size)
+        .with_min_inner_size([APP_MIN_WIDTH, APP_MIN_HEIGHT]);
+
+    #[cfg(target_os = "macos")]
+    {
+        // Match Translator/Tauri's native overlay titlebar style: keep the real
+        // macOS traffic lights and rounded window frame, but let egui paint app
+        // actions in the titlebar content area.
+        viewport
+            .with_title("")
+            .with_decorations(true)
+            .with_transparent(false)
+            .with_fullsize_content_view(true)
+            .with_title_shown(false)
+            .with_titlebar_shown(false)
+            .with_titlebar_buttons_shown(true)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Other platforms keep the existing custom borderless window path.
+        viewport
+            .with_title("Morn")
+            .with_decorations(false)
+            .with_transparent(true)
+    }
 }
 
 fn startup_window_size() -> [f32; 2] {
@@ -56,14 +97,14 @@ fn startup_window_size() -> [f32; 2] {
 fn restored_selected_video_path(prefs_path: PathBuf) -> Option<PathBuf> {
     let player = engine::Player::with_prefs(prefs_path);
     let index = player.current_index()?;
-    player.playlist_paths().get(index).cloned()
+    return player.playlist_paths().get(index).cloned();
 }
 
 fn selected_video_dimensions(path: &Path) -> Option<(u32, u32)> {
     if !path.is_file() {
         return None;
     }
-    let decoder = media::VideoDecoder::open(path).ok()?;
+    let decoder = media::VideoDecoder::open_path(path).ok()?;
     Some((decoder.width(), decoder.height()))
 }
 
@@ -92,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn viewport_uses_native_window_decorations() {
+    fn viewport_uses_native_macos_titlebar_overlay_and_custom_fallback_elsewhere() {
         let source = include_str!("main.rs")
             .split("#[cfg(test)]")
             .next()
@@ -101,10 +142,15 @@ mod tests {
         assert!(source.contains("ViewportBuilder::default()"));
         assert!(source.contains("let initial_inner_size = startup_window_size()"));
         assert!(source.contains(".with_inner_size(initial_inner_size)"));
+        assert!(source.contains(".with_title(\"\")"));
         assert!(source.contains(".with_title(\"Morn\")"));
-        assert!(source.contains(".with_decorations(true)"));
-        assert!(source.contains(".with_transparent(false)"));
-        assert!(!source.contains("with_fullsize_content_view(true)"));
+        assert!(source.contains(".with_fullsize_content_view(true)"));
+        assert!(source.contains(".with_title_shown(false)"));
+        assert!(source.contains(".with_titlebar_shown(false)"));
+        assert!(source.contains(".with_titlebar_buttons_shown(true)"));
+        // Non-macOS keeps the custom borderless transparent window path.
+        assert!(source.contains(".with_decorations(false)"));
+        assert!(source.contains(".with_transparent(true)"));
     }
 
     #[test]
@@ -142,6 +188,6 @@ mod tests {
         assert!(source.contains("startup_window_size()"));
         assert!(source.contains("restored_selected_video_path(app::prefs_path())"));
         assert!(source.contains("engine::Player::with_prefs"));
-        assert!(source.contains("media::VideoDecoder::open(path)"));
+        assert!(source.contains("media::VideoDecoder::open_path(path)"));
     }
 }

@@ -1,3 +1,10 @@
+//! macOS-specific app metadata wiring.
+//!
+//! This module patches runtime bundle metadata used by the native About panel and
+//! installs the bundled PNG as the application icon.  The Objective-C calls stay
+//! isolated here so the cross-platform startup path only has to pass the current
+//! version string.
+
 use objc2::rc::Retained;
 use objc2::{msg_send, ClassType};
 use objc2_app_kit::{

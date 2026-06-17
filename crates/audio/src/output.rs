@@ -1,12 +1,24 @@
+//! Audio output stream, callback filling, and playback-rate conversion.
+//!
+//! Decoded audio reaches this module as interleaved `f32` samples through a
+//! ring buffer.  The realtime cpal callback applies the latest shared volume,
+//! handles seek flushes, honors the seek gate, and advances `MasterClock` only
+//! for samples actually consumed from the buffer.
+//!
+//! The callback path must stay allocation-free and short.  Format-specific cpal
+//! streams all call the same generic `fill_output` helper so f32/i16/u16 output
+//! keeps identical gate, gain, underrun, and clock behavior.
+
 use crate::clock::MasterClock;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Sample, SampleFormat};
+use cpal::{FromSample, Sample, SampleFormat, SizedSample};
 use ringbuf::traits::{Consumer, Split};
 use ringbuf::HeapRb;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 
 pub type SampleProducer = <HeapRb<f32> as Split>::Prod;
+type SampleConsumer = <HeapRb<f32> as Split>::Cons;
 
 /// 把解码得到的交错 PCM 按播放倍速与设备采样率转换成输出端应消费的样本。
 /// 使用 time-stretch 改变时长, 避免重采样造成的音高变化。
@@ -106,98 +118,21 @@ impl AudioOutput {
 
         // ~1 秒缓冲
         let rb = HeapRb::<f32>::new(sample_rate as usize * channels as usize);
-        let (producer, mut consumer) = rb.split();
+        let (producer, consumer) = rb.split();
 
-        let ch = channels as u64;
-        let err_fn = |e| eprintln!("音频流错误: {e}");
-
-        let stream = match sample_format {
-            SampleFormat::F32 => device
-                .build_output_stream(
-                    &config,
-                    move |data: &mut [f32], _| {
-                        if flush.swap(false, Ordering::Relaxed) {
-                            while consumer.try_pop().is_some() {}
-                        }
-                        if gate.load(Ordering::Relaxed) {
-                            data.fill(0.0);
-                            return; // 闸门期间: 静音、不消费、不计时(主时钟冻结)
-                        }
-                        let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-                        let mut real = 0u64;
-                        for slot in data.iter_mut() {
-                            match consumer.try_pop() {
-                                Some(s) => {
-                                    *slot = s * g;
-                                    real += 1;
-                                }
-                                None => *slot = 0.0, // 欠载补静音, 但不计入主时钟
-                            }
-                        }
-                        clock_cb.add_frames(real / ch);
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| e.to_string())?,
-            SampleFormat::U16 => device
-                .build_output_stream(
-                    &config,
-                    move |data: &mut [u16], _| {
-                        if flush.swap(false, Ordering::Relaxed) {
-                            while consumer.try_pop().is_some() {}
-                        }
-                        if gate.load(Ordering::Relaxed) {
-                            data.fill(u16::from_sample(0.0));
-                            return; // 闸门期间: 静音、不消费、不计时(主时钟冻结)
-                        }
-                        let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-                        let mut real = 0u64;
-                        for slot in data.iter_mut() {
-                            match consumer.try_pop() {
-                                Some(s) => {
-                                    *slot = u16::from_sample(s * g);
-                                    real += 1;
-                                }
-                                None => *slot = u16::from_sample(0.0),
-                            }
-                        }
-                        clock_cb.add_frames(real / ch);
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| e.to_string())?,
-            SampleFormat::I16 => device
-                .build_output_stream(
-                    &config,
-                    move |data: &mut [i16], _| {
-                        if flush.swap(false, Ordering::Relaxed) {
-                            while consumer.try_pop().is_some() {}
-                        }
-                        if gate.load(Ordering::Relaxed) {
-                            data.fill(i16::from_sample(0.0));
-                            return; // 闸门期间: 静音、不消费、不计时(主时钟冻结)
-                        }
-                        let g = volume.load(Ordering::Relaxed).min(100) as f32 / 100.0;
-                        let mut real = 0u64;
-                        for slot in data.iter_mut() {
-                            match consumer.try_pop() {
-                                Some(s) => {
-                                    *slot = i16::from_sample(s * g);
-                                    real += 1;
-                                }
-                                None => *slot = i16::from_sample(0.0),
-                            }
-                        }
-                        clock_cb.add_frames(real / ch);
-                    },
-                    err_fn,
-                    None,
-                )
-                .map_err(|e| e.to_string())?,
-            other => return Err(format!("不支持的采样格式: {other:?}")),
-        };
+        let stream = build_output_stream(
+            sample_format,
+            &device,
+            &config,
+            StreamCallback {
+                consumer,
+                flush,
+                gate,
+                volume,
+                clock: clock_cb,
+                channels: channels as u64,
+            },
+        )?;
 
         stream.play().map_err(|e| format!("启动音频流失败: {e}"))?;
 
@@ -209,6 +144,110 @@ impl AudioOutput {
             sample_rate,
         })
     }
+}
+
+struct StreamCallback {
+    consumer: SampleConsumer,
+    flush: Arc<AtomicBool>,
+    gate: Arc<AtomicBool>,
+    volume: Arc<AtomicU8>,
+    clock: MasterClock,
+    channels: u64,
+}
+
+impl StreamCallback {
+    fn fill<T>(&mut self, data: &mut [T])
+    where
+        T: Sample + FromSample<f32> + Copy,
+    {
+        fill_output(
+            data,
+            OutputCallback {
+                consumer: &mut self.consumer,
+                flush: self.flush.as_ref(),
+                gate: self.gate.as_ref(),
+                volume: self.volume.as_ref(),
+                clock: &self.clock,
+                channels: self.channels,
+            },
+        );
+    }
+}
+
+fn build_output_stream(
+    sample_format: SampleFormat,
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    callback: StreamCallback,
+) -> Result<cpal::Stream, String> {
+    match sample_format {
+        SampleFormat::F32 => build_typed_output_stream::<f32>(device, config, callback),
+        SampleFormat::U16 => build_typed_output_stream::<u16>(device, config, callback),
+        SampleFormat::I16 => build_typed_output_stream::<i16>(device, config, callback),
+        other => Err(format!("不支持的采样格式: {other:?}")),
+    }
+}
+
+fn build_typed_output_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    mut callback: StreamCallback,
+) -> Result<cpal::Stream, String>
+where
+    T: SizedSample + Sample + FromSample<f32> + Copy,
+{
+    device
+        .build_output_stream(
+            config,
+            move |data: &mut [T], _| callback.fill(data),
+            |e| eprintln!("音频流错误: {e}"),
+            None,
+        )
+        .map_err(|e| e.to_string())
+}
+
+fn clear_consumer_if_flushed(consumer: &mut impl Consumer<Item = f32>, flush: &AtomicBool) {
+    if flush.swap(false, Ordering::Relaxed) {
+        while consumer.try_pop().is_some() {}
+    }
+}
+
+fn output_gain(volume: &AtomicU8) -> f32 {
+    volume.load(Ordering::Relaxed).min(100) as f32 / 100.0
+}
+
+struct OutputCallback<'a, C: Consumer<Item = f32>> {
+    consumer: &'a mut C,
+    flush: &'a AtomicBool,
+    gate: &'a AtomicBool,
+    volume: &'a AtomicU8,
+    clock: &'a MasterClock,
+    channels: u64,
+}
+
+fn fill_output<T, C>(data: &mut [T], ctx: OutputCallback<'_, C>)
+where
+    T: Sample + FromSample<f32> + Copy,
+    C: Consumer<Item = f32>,
+{
+    clear_consumer_if_flushed(ctx.consumer, ctx.flush);
+    let silence = T::from_sample(0.0);
+    if ctx.gate.load(Ordering::Relaxed) {
+        data.fill(silence);
+        return;
+    }
+    let gain = output_gain(ctx.volume);
+    let mut real = 0u64;
+    for slot in data.iter_mut() {
+        match ctx.consumer.try_pop() {
+            Some(sample) => {
+                *slot = T::from_sample(sample * gain);
+                real += 1;
+            }
+            None => *slot = silence,
+        }
+    }
+    ctx.clock.add_frames(real / ctx.channels);
 }
 
 fn is_supported_sample_format(format: SampleFormat) -> bool {

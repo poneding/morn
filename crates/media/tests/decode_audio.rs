@@ -1,3 +1,11 @@
+//! Audio decoder integration tests.
+//!
+//! These tests exercise the generated MP4 fixture through the public decoder API:
+//! opening the stream, reading interleaved `f32` chunks, and reporting a clean error
+//! for a missing file.  The frame-count assertion intentionally allows a small
+//! tolerance because container metadata and decoder priming can differ across
+//! FFmpeg builds.
+
 use media::AudioDecoder;
 use std::path::Path;
 
@@ -10,7 +18,7 @@ fn decodes_audio_to_f32_chunks() {
     let path = fixture();
     assert!(path.exists(), "先运行 tests/gen_fixture.sh 生成样本");
 
-    let mut dec = AudioDecoder::open(&path).unwrap();
+    let mut dec = AudioDecoder::open_path(&path).unwrap();
     assert!(dec.channels() >= 1);
     assert!(dec.sample_rate() > 0);
 
@@ -30,5 +38,6 @@ fn decodes_audio_to_f32_chunks() {
 #[test]
 fn open_nonexistent_file_returns_err() {
     let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/does_not_exist.mp4");
-    assert!(AudioDecoder::open(&missing).is_err());
+    let missing_result = AudioDecoder::open_path(&missing);
+    assert!(missing_result.is_err());
 }

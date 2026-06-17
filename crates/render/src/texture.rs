@@ -1,3 +1,9 @@
+//! Native video texture wrapper for egui/wgpu presentation.
+//!
+//! The render crate owns only GPU texture allocation and upload.  Frame selection,
+//! aspect fitting, and egui texture registration stay in the app layer so this type
+//! remains a small reusable bridge from decoder RGBA bytes to a `wgpu::Texture`.
+
 /// 持有一个 Rgba8Unorm 纹理, 支持每帧上传与按需重建。
 pub struct VideoTexture {
     texture: wgpu::Texture,
@@ -7,7 +13,7 @@ pub struct VideoTexture {
 
 impl VideoTexture {
     pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let texture = Self::create(device, width, height);
+        let texture = Self::create_texture(device, width, height);
         Self {
             texture,
             width,
@@ -15,7 +21,7 @@ impl VideoTexture {
         }
     }
 
-    fn create(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+    fn create_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("video_frame"),
             size: wgpu::Extent3d {
@@ -39,7 +45,7 @@ impl VideoTexture {
     /// 帧尺寸变化时重建底层纹理。
     pub fn ensure_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if (width, height) != (self.width, self.height) {
-            self.texture = Self::create(device, width, height);
+            self.texture = Self::create_texture(device, width, height);
             self.width = width;
             self.height = height;
         }

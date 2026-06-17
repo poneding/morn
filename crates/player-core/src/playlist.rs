@@ -1,3 +1,18 @@
+//! In-memory playlist cursor.
+//!
+//! `Playlist` owns only ordered paths and the selected index; it deliberately does
+//! not open files, inspect metadata, or persist state.  That keeps playlist mutation
+//! reusable from the engine and lets command handlers decide when media teardown,
+//! resume-point saving, and history updates should happen.
+//!
+//! Cursor methods clamp or return `None` instead of exposing panics to callers.  The
+//! UI can therefore delete or reorder items based on stale frame snapshots while the
+//! engine still resolves the current item from the updated list.
+//!
+//! Duplicate paths are treated as one logical playlist entry.  Open commands move
+//! the cursor to an existing item instead of appending a second copy, which keeps
+//! resume-state persistence and keyboard navigation aligned with what the user sees.
+
 use std::path::PathBuf;
 
 pub struct Playlist {
@@ -58,7 +73,7 @@ impl Playlist {
     }
 
     pub fn current(&self) -> Option<&PathBuf> {
-        self.items.get(self.cursor)
+        return self.items.get(self.cursor);
     }
 
     pub fn iter(&self) -> std::slice::Iter<'_, std::path::PathBuf> {
@@ -70,6 +85,8 @@ impl Playlist {
     }
 
     pub fn current_index(&self) -> Option<usize> {
+        // Empty playlists expose no current index even though cursor is internally
+        // kept at zero for the next insertion.
         if self.items.is_empty() {
             None
         } else {
@@ -89,6 +106,8 @@ impl Playlist {
         }
 
         let removed = self.items.remove(index);
+        // Preserve the same logical current item when removing before the cursor;
+        // otherwise clamp to the nearest remaining item.
         if self.items.is_empty() {
             self.cursor = 0;
         } else if index < self.cursor {
@@ -116,6 +135,7 @@ impl Playlist {
 
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<&PathBuf> {
+        // Returning None at the edge leaves the cursor on the last playable item.
         if self.cursor + 1 < self.items.len() {
             self.cursor += 1;
             self.current()
@@ -125,6 +145,7 @@ impl Playlist {
     }
 
     pub fn prev(&mut self) -> Option<&PathBuf> {
+        // Returning None at the edge leaves the cursor on the first playable item.
         if self.cursor > 0 {
             self.cursor -= 1;
             self.current()

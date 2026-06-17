@@ -1,3 +1,14 @@
+//! Persistent user preferences.
+//!
+//! Preferences are low-risk state, so loading is forgiving: missing files and corrupt
+//! JSON both fall back to defaults rather than blocking startup.  Saving is stricter
+//! and uses a temporary file followed by rename so a crash cannot leave a partially
+//! written preferences file at the target path.
+//!
+//! Paths are normalized at load/save boundaries.  In particular the screenshot
+//! directory accepts the current user's `~` prefix for legacy configs, but does not
+//! try to expand another user's home directory.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -15,6 +26,8 @@ pub enum PlaybackMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    // Every field has a default so old preference files can be loaded after new
+    // settings are added.
     pub volume: u8,
     pub window_size: (u32, u32),
     pub language: String,
@@ -80,13 +93,17 @@ fn default_home_dir() -> PathBuf {
 }
 
 fn home_dir_from_env(home: Option<OsString>, user_profile: Option<OsString>) -> Option<PathBuf> {
-    let home = home.filter(|home| !home.is_empty());
-    let user_profile = user_profile.filter(|user_profile| !user_profile.is_empty());
+    // Prefer the platform-native home variable but keep the other as a fallback for
+    // shells that bridge Unix and Windows environments.
     #[cfg(windows)]
-    let selected = user_profile.or(home);
+    let selected = non_empty_env_path(user_profile).or_else(|| non_empty_env_path(home));
     #[cfg(not(windows))]
-    let selected = home.or(user_profile);
+    let selected = non_empty_env_path(home).or_else(|| non_empty_env_path(user_profile));
     selected.map(PathBuf::from)
+}
+
+fn non_empty_env_path(path: Option<OsString>) -> Option<OsString> {
+    path.filter(|path| !path.is_empty())
 }
 
 fn default_screenshot_dir_string() -> String {
@@ -94,6 +111,8 @@ fn default_screenshot_dir_string() -> String {
 }
 
 fn push_path_segments(path: &mut PathBuf, rest: &str) {
+    // Split both separator styles so legacy config files migrate cleanly across
+    // platforms.
     for segment in rest
         .split(['/', '\\'])
         .filter(|segment| !segment.is_empty())
@@ -104,16 +123,20 @@ fn push_path_segments(path: &mut PathBuf, rest: &str) {
 
 impl Preferences {
     fn normalize_paths(&mut self) {
+        // Persist resolved screenshot paths so later app versions do not need to
+        // keep interpreting legacy `~` spellings on every UI read.
         self.screenshot_dir = resolve_screenshot_dir(&self.screenshot_dir)
             .to_string_lossy()
             .into_owned();
     }
 
     pub fn resume_point(&self, file: &str) -> Option<u64> {
-        self.resume_points.get(file).copied()
+        return self.resume_points.get(file).copied();
     }
 
     pub fn set_resume_point(&mut self, file: &str, ms: u64) {
+        // Resume points are keyed by display path strings because playlist/history
+        // persistence already stores paths in that format.
         self.resume_points.insert(file.to_string(), ms);
     }
 
@@ -140,16 +163,21 @@ impl Preferences {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        // Normalize a clone before serialization so callers keep their in-memory
+        // value untouched until they explicitly set a new preference.
         let mut prefs = self.clone();
         prefs.normalize_paths();
         let json = serde_json::to_string_pretty(&prefs).map_err(std::io::Error::other)?;
         let tmp = temp_save_path(path);
-        std::fs::write(&tmp, json)?;
+        let write_result = std::fs::write(&tmp, json);
+        write_result?;
         replace_file(&tmp, path)
     }
 }
 
 fn temp_save_path(path: &Path) -> PathBuf {
+    // Put the temp file beside the destination so the final rename stays within
+    // the same filesystem when possible.
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -158,16 +186,45 @@ fn temp_save_path(path: &Path) -> PathBuf {
 }
 
 fn replace_file(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    // Windows rename will not replace an existing file, while Unix rename does.
+    // Keep the platform difference here so save() reads the same everywhere.
     #[cfg(windows)]
     if path.exists() {
         std::fs::remove_file(path)?;
     }
-    std::fs::rename(tmp, path)
+    return std::fs::rename(tmp, path);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_prefs_path(name: &str) -> std::io::Result<(tempfile::TempDir, PathBuf)> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join(name);
+        Ok((dir, path))
+    }
+
+    fn save_and_load(prefs: &Preferences) -> std::io::Result<Preferences> {
+        let (_dir, path) = temp_prefs_path("prefs.json")?;
+        prefs.save(&path)?;
+        Preferences::load(&path)
+    }
+
+    fn load_json_preferences(json: &str) -> std::io::Result<Preferences> {
+        let (_dir, path) = temp_prefs_path("prefs.json")?;
+        let write_result = std::fs::write(&path, json);
+        write_result?;
+        Preferences::load(&path)
+    }
+
+    fn save_read_and_load(prefs: &Preferences) -> std::io::Result<(String, Preferences)> {
+        let (_dir, path) = temp_prefs_path("prefs.json")?;
+        prefs.save(&path)?;
+        let saved = std::fs::read_to_string(&path)?;
+        let loaded = Preferences::load(&path)?;
+        Ok((saved, loaded))
+    }
 
     #[test]
     fn defaults_are_sane() {
@@ -239,7 +296,7 @@ mod tests {
         let source = include_str!("prefs.rs")
             .split("#[cfg(test)]")
             .next()
-            .unwrap();
+            .unwrap_or_default();
 
         assert!(source.contains("pub screenshot_dir: String"));
         assert!(source.contains("default_screenshot_dir()"));
@@ -256,100 +313,89 @@ mod tests {
 
     #[test]
     #[allow(clippy::field_reassign_with_default)]
-    fn save_then_load_roundtrips_all_fields() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("prefs.json");
-
+    fn save_then_load_roundtrips_all_fields() -> std::io::Result<()> {
+        let (_dir, path) = temp_prefs_path("prefs.json")?;
         let mut p = Preferences::default();
         p.volume = 55;
         p.window_size = (1920, 1080);
-        p.screenshot_dir = dir.path().join("shots").to_string_lossy().into_owned();
+        p.screenshot_dir = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("shots")
+            .to_string_lossy()
+            .into_owned();
         p.set_resume_point("/v.mp4", 12_345);
-        p.save(&path).unwrap();
+        p.save(&path)?;
 
-        let loaded = Preferences::load(&path).unwrap();
+        let loaded = Preferences::load(&path)?;
         assert_eq!(loaded.volume, 55);
         assert_eq!(loaded.window_size, (1920, 1080));
         assert_eq!(loaded.screenshot_dir, p.screenshot_dir);
         assert_eq!(loaded.resume_point("/v.mp4"), Some(12_345));
+        Ok(())
     }
 
     #[test]
-    fn load_missing_file_returns_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nonexistent.json");
-        let loaded = Preferences::load(&path).unwrap();
+    fn load_missing_file_returns_default() -> std::io::Result<()> {
+        let (_dir, path) = temp_prefs_path("nonexistent.json")?;
+        let loaded = Preferences::load(&path)?;
         assert_eq!(loaded.volume, 100);
+        Ok(())
     }
 
     #[test]
-    fn load_old_preferences_without_screenshot_dir_uses_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("old.json");
-        std::fs::write(&path, r#"{"volume":55,"window_size":[1024,768]}"#).unwrap();
-
-        let loaded = Preferences::load(&path).unwrap();
+    fn load_old_preferences_without_screenshot_dir_uses_default() -> std::io::Result<()> {
+        let loaded = load_json_preferences(r#"{"volume":55,"window_size":[1024,768]}"#)?;
 
         assert_eq!(loaded.volume, 55);
         assert_eq!(
             loaded.screenshot_dir,
             default_screenshot_dir().to_string_lossy()
         );
+        Ok(())
     }
 
     #[test]
-    fn load_legacy_tilde_screenshot_dir_expands_to_home() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("legacy-tilde.json");
-        std::fs::write(
-            &path,
+    fn load_legacy_tilde_screenshot_dir_expands_to_home() -> std::io::Result<()> {
+        let loaded = load_json_preferences(
             r#"{"volume":55,"window_size":[1024,768],"screenshot_dir":"~\\Pictures\\Morn"}"#,
-        )
-        .unwrap();
-
-        let loaded = Preferences::load(&path).unwrap();
+        )?;
 
         assert_eq!(
             loaded.screenshot_dir,
             default_screenshot_dir().to_string_lossy()
         );
+        Ok(())
     }
 
     #[test]
-    fn save_legacy_tilde_screenshot_dir_writes_resolved_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("prefs.json");
+    fn save_legacy_tilde_screenshot_dir_writes_resolved_path() -> std::io::Result<()> {
         let prefs = Preferences {
             screenshot_dir: "~\\Pictures\\Morn".to_string(),
             ..Default::default()
         };
 
-        prefs.save(&path).unwrap();
-        let saved = std::fs::read_to_string(&path).unwrap();
-        let loaded = Preferences::load(&path).unwrap();
+        let (saved, loaded) = save_read_and_load(&prefs)?;
 
         assert!(!saved.contains(r#""screenshot_dir": "~\\"#));
         assert_eq!(
             loaded.screenshot_dir,
             default_screenshot_dir().to_string_lossy()
         );
+        Ok(())
     }
 
     #[test]
-    fn load_corrupt_json_returns_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("corrupt.json");
-        std::fs::write(&path, "{ not valid json").unwrap();
-        let loaded = Preferences::load(&path).unwrap();
+    fn load_corrupt_json_returns_default() -> std::io::Result<()> {
+        let loaded = load_json_preferences("{ not valid json")?;
         assert_eq!(loaded.volume, 100);
         assert_eq!(loaded.window_size, (1280, 720));
+        Ok(())
     }
 
     #[test]
     #[allow(clippy::field_reassign_with_default)]
-    fn new_settings_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("p.json");
+    fn new_settings_round_trip() -> std::io::Result<()> {
         let mut p = Preferences::default();
         p.language = "zh-TW".into();
         p.seek_step_secs = 20;
@@ -358,8 +404,7 @@ mod tests {
         p.playback_mode = PlaybackMode::RepeatOne;
         p.check_updates_on_startup = true;
         p.check_beta_updates = true;
-        p.save(&path).unwrap();
-        let loaded = Preferences::load(&path).unwrap();
+        let loaded = save_and_load(&p)?;
         assert_eq!(loaded.language, "zh-TW");
         assert_eq!(loaded.seek_step_secs, 20);
         assert_eq!(loaded.theme, "dark");
@@ -367,6 +412,7 @@ mod tests {
         assert_eq!(loaded.playback_mode, PlaybackMode::RepeatOne);
         assert!(loaded.check_updates_on_startup);
         assert!(loaded.check_beta_updates);
+        Ok(())
     }
 
     #[test]
@@ -384,15 +430,12 @@ mod tests {
 
     #[test]
     #[allow(clippy::field_reassign_with_default)]
-    fn playlist_history_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("p.json");
+    fn playlist_history_round_trip() -> std::io::Result<()> {
         let mut p = Preferences::default();
         p.last_playlist = vec!["/a.mp4".into(), "/b.mp4".into()];
         p.last_index = 1;
         p.history = vec!["/b.mp4".into(), "/a.mp4".into()];
-        p.save(&path).unwrap();
-        let loaded = Preferences::load(&path).unwrap();
+        let loaded = save_and_load(&p)?;
         assert_eq!(
             loaded.last_playlist,
             vec!["/a.mp4".to_string(), "/b.mp4".to_string()]
@@ -402,6 +445,7 @@ mod tests {
             loaded.history,
             vec!["/b.mp4".to_string(), "/a.mp4".to_string()]
         );
+        Ok(())
     }
 
     #[test]

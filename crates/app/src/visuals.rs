@@ -1,10 +1,18 @@
 use eframe::egui;
 
 pub const FLOATING_PANEL_MARGIN: f32 = 6.0;
+pub const ICON_BUTTON_SIZE: f32 = 28.0;
+pub const COMPACT_ICON_BUTTON_SIZE: f32 = 24.0;
+pub const CONTROL_CORNER_RADIUS: u8 = 6;
 pub const FLOATING_CONTROL_BAR_INNER_MARGIN_Y: i8 = 6;
-pub const FROSTED_PANEL_RADIUS: u8 = 8;
-pub const FROSTED_PANEL_DARK_SHIFT: u8 = 10;
-pub const FROSTED_PANEL_LIGHT_SHIFT: u8 = 6;
+pub const FLOATING_PANEL_INNER_MARGIN_X: i8 = 14;
+pub const FLOATING_PANEL_INNER_MARGIN_Y: i8 = 10;
+/// 浮动面板圆角(底部控制栏、播放列表、设置、弹出层)。参考 flashot 标注工具栏。
+pub const PANEL_CORNER_RADIUS: u8 = 10;
+/// 面板投影: 比默认更沉, 参考 flashot 的 `0 4px 24px rgba(0,0,0,.4)`。
+const PANEL_SHADOW_OFFSET: [i8; 2] = [0, 4];
+const PANEL_SHADOW_BLUR: u8 = 24;
+const PANEL_SHADOW_ALPHA: u8 = 110;
 
 pub fn popup_anchor_above_floating_control_bar(response: &egui::Response) -> egui::PopupAnchor {
     let mut rect = response.interact_rect;
@@ -18,54 +26,52 @@ pub fn popup_anchor_above_floating_control_bar(response: &egui::Response) -> egu
     ))
 }
 
-fn frosted_fill_from_visuals(visuals: &egui::Visuals) -> egui::Color32 {
-    let panel_fill = visuals.panel_fill;
-    let shift = if visuals.dark_mode {
-        FROSTED_PANEL_DARK_SHIFT
-    } else {
-        FROSTED_PANEL_LIGHT_SHIFT
-    };
-    egui::Color32::from_rgba_unmultiplied(
-        panel_fill.r().saturating_add(shift),
-        panel_fill.g().saturating_add(shift),
-        panel_fill.b().saturating_add(shift),
-        255,
-    )
+/// 浮动面板填充: 取主题的浮层底色并强制不透明——按用户要求**不做磨砂**, 用干净的
+/// 实色深色面板(flashot 风格), 视频不再从面板后透出。
+fn panel_fill_from_visuals(visuals: &egui::Visuals) -> egui::Color32 {
+    visuals.window_fill.to_opaque()
 }
 
-fn frosted_stroke_from_visuals(visuals: &egui::Visuals) -> egui::Stroke {
-    let color = visuals.widgets.noninteractive.bg_stroke.color;
-    egui::Stroke::new(
-        1.0,
-        egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 255),
-    )
+fn panel_border_stroke() -> egui::Stroke {
+    // 不要边框: flashot 面板也没有描边，只有投影。
+    egui::Stroke::NONE
 }
 
-pub fn frosted_frame(ui: &egui::Ui, inner_margin: egui::Margin) -> egui::Frame {
-    frosted_frame_for_style(ui.style(), inner_margin)
+fn panel_shadow() -> egui::epaint::Shadow {
+    egui::epaint::Shadow {
+        offset: PANEL_SHADOW_OFFSET,
+        blur: PANEL_SHADOW_BLUR,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(PANEL_SHADOW_ALPHA),
+    }
 }
 
-pub fn frosted_frame_for_style(style: &egui::Style, inner_margin: egui::Margin) -> egui::Frame {
+pub fn panel_frame(ui: &egui::Ui, inner_margin: egui::Margin) -> egui::Frame {
+    panel_frame_for_style(ui.style(), inner_margin)
+}
+
+/// 干净的实色深色面板(flashot 标注工具栏风格): 不透明底 + 白色细边 + 沉稳投影。
+pub fn panel_frame_for_style(style: &egui::Style, inner_margin: egui::Margin) -> egui::Frame {
     egui::Frame::NONE
-        .fill(frosted_fill_from_visuals(&style.visuals))
-        .stroke(frosted_stroke_from_visuals(&style.visuals))
-        .corner_radius(FROSTED_PANEL_RADIUS)
-        .shadow(style.visuals.popup_shadow)
+        .fill(panel_fill_from_visuals(&style.visuals))
+        .stroke(panel_border_stroke())
+        .corner_radius(PANEL_CORNER_RADIUS)
+        .shadow(panel_shadow())
         .inner_margin(inner_margin)
 }
 
-pub fn frosted_popup_style() -> egui::style::StyleModifier {
+/// 下拉/菜单弹出层样式: 同样的实色深色面板, 去掉 hover 描边与膨胀, 保持扁平。
+pub fn panel_popup_style() -> egui::style::StyleModifier {
     egui::style::StyleModifier::new(|style: &mut egui::Style| {
         egui::containers::menu::menu_style(style);
-        let fill = frosted_fill_from_visuals(&style.visuals);
-        let stroke = frosted_stroke_from_visuals(&style.visuals);
+        let fill = panel_fill_from_visuals(&style.visuals);
 
         style.visuals.window_fill = fill;
         style.visuals.panel_fill = fill;
-        style.visuals.window_stroke = stroke;
-        style.visuals.popup_shadow = style.visuals.window_shadow;
-        style.visuals.menu_corner_radius = egui::CornerRadius::same(FROSTED_PANEL_RADIUS);
-        style.visuals.window_corner_radius = egui::CornerRadius::same(FROSTED_PANEL_RADIUS);
+        style.visuals.window_stroke = panel_border_stroke();
+        style.visuals.popup_shadow = panel_shadow();
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(PANEL_CORNER_RADIUS);
+        style.visuals.window_corner_radius = egui::CornerRadius::same(PANEL_CORNER_RADIUS);
         style.visuals.widgets.inactive.weak_bg_fill =
             egui::Color32::from_rgba_unmultiplied(0, 0, 0, 0);
         style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
@@ -83,13 +89,17 @@ pub fn frosted_popup_style() -> egui::style::StyleModifier {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn frosted_colors_are_opaque() {
-        let visuals = egui::Visuals::dark();
-        let fill = super::frosted_fill_from_visuals(&visuals);
-        let stroke = super::frosted_stroke_from_visuals(&visuals);
+    fn panel_fill_is_opaque_solid_dark_surface() {
+        // 不做磨砂: 面板底必须完全不透明, 视频不从后面透出。
+        let dark = super::panel_fill_from_visuals(&egui::Visuals::dark());
+        assert_eq!(dark.a(), 255, "面板应为实色不透明");
+    }
 
-        assert_eq!(fill.a(), 255);
-        assert_eq!(stroke.color.a(), 255);
+    #[test]
+    fn panel_border_is_none_for_clean_look() {
+        // flashot 风格: 面板只有投影，无描边。
+        let stroke = super::panel_border_stroke();
+        assert_eq!(stroke.width, 0.0);
     }
 
     #[test]
@@ -99,9 +109,19 @@ mod tests {
     }
 
     #[test]
+    fn shared_control_tokens_keep_overlays_consistent() {
+        assert_eq!(super::ICON_BUTTON_SIZE, 28.0);
+        assert_eq!(super::COMPACT_ICON_BUTTON_SIZE, 24.0);
+        assert_eq!(super::CONTROL_CORNER_RADIUS, 6);
+        assert_eq!(super::FLOATING_PANEL_INNER_MARGIN_X, 14);
+        assert_eq!(super::FLOATING_PANEL_INNER_MARGIN_Y, 10);
+        assert_eq!(super::PANEL_CORNER_RADIUS, 10);
+    }
+
+    #[test]
     fn popup_menu_widget_states_do_not_add_hover_borders_or_expansion() {
         let mut style = egui::Style::default();
-        super::frosted_popup_style().apply(&mut style);
+        super::panel_popup_style().apply(&mut style);
 
         assert_eq!(style.visuals.widgets.inactive.bg_stroke, egui::Stroke::NONE);
         assert_eq!(style.visuals.widgets.hovered.bg_stroke, egui::Stroke::NONE);

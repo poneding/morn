@@ -1,25 +1,51 @@
+//! Titlebar app-action overlay.
+//!
+//! On macOS this mirrors Translator's native overlay titlebar: the OS keeps the
+//! real traffic lights and window frame while egui paints the app actions in the
+//! titlebar content area. Other platforms keep the existing custom borderless
+//! titlebar path.
+
 use eframe::egui;
 use rust_i18n::t;
 
 const TITLEBAR_HEIGHT: f32 = 28.0;
-const TITLEBAR_OPACITY: f32 = 0.86;
-const TITLEBAR_BUTTON_SIZE: f32 = 22.0;
-const WINDOW_CORNER_RADIUS: u8 = 10;
-const WINDOW_RESIZE_HANDLE: f32 = 6.0;
+const TITLEBAR_BUTTON_SIZE: f32 = crate::visuals::ICON_BUTTON_SIZE;
+const TITLEBAR_INNER_MARGIN_X: i8 = 8;
+const TITLEBAR_INNER_MARGIN_Y: i8 = 3;
+#[cfg(not(target_os = "macos"))]
+const TITLEBAR_FADE_TIME: f32 = 0.12;
 #[cfg(target_os = "macos")]
-const TRAFFIC_LIGHT_SYMBOL_COLOR: egui::Color32 = egui::Color32::from_black_alpha(150);
+const NATIVE_TRAFFIC_LIGHT_SPACER_WIDTH: f32 = 72.0;
+const TITLEBAR_TRAILING_MARGIN: f32 = crate::visuals::FLOATING_PANEL_INNER_MARGIN_X as f32;
+/// 标题栏这个 UI 元素的底部位置。浮层与顶部 Title 的视觉间距应从这里开始算,
+/// 而不是从窗口顶部边框开始算。
+pub const TITLEBAR_BOTTOM_OFFSET: f32 = TITLEBAR_HEIGHT + (TITLEBAR_INNER_MARGIN_Y as f32) * 2.0;
+const WINDOW_CORNER_RADIUS: u8 = crate::visuals::PANEL_CORNER_RADIUS;
+#[cfg(not(target_os = "macos"))]
+const WINDOW_RESIZE_HANDLE: f32 = 6.0;
 
 #[derive(Default)]
 pub struct TitlebarActions {
+    // The titlebar returns app-level intents instead of mutating PlayerApp while
+    // the overlay is being painted.
     pub toggle_playlist: bool,
     pub toggle_settings: bool,
 }
 
 pub fn titlebar_visible(pointer_pos: Option<egui::Pos2>, screen_rect: egui::Rect) -> bool {
+    // Visibility is pointer-driven rather than focus-driven so keyboard playback
+    // shortcuts do not accidentally reveal chrome, and it auto-hides on leave.
     pointer_pos.is_some_and(|pos| screen_rect.contains(pos))
 }
 
-pub fn paint_window_background(ctx: &egui::Context) {
+pub fn window_corner_radius() -> f32 {
+    WINDOW_CORNER_RADIUS as f32
+}
+
+#[cfg(not(target_os = "macos"))]
+fn paint_window_background(ctx: &egui::Context) {
+    // Transparent native windows need an explicit rounded background; otherwise
+    // the video surface can leave square transparent corners during resize.
     let screen_rect = ctx.content_rect();
     let visuals = &ctx.global_style().visuals;
     let painter = ctx.layer_painter(egui::LayerId::background());
@@ -32,170 +58,7 @@ pub fn paint_window_background(ctx: &egui::Context) {
     );
 }
 
-pub fn show_custom_titlebar(ctx: &egui::Context, show_playlist: bool) -> TitlebarActions {
-    let mut actions = TitlebarActions::default();
-    let screen_rect = ctx.content_rect();
-    show_resize_handles(ctx, screen_rect);
-
-    let pointer_pos = ctx.input(|i| i.pointer.hover_pos());
-    if !titlebar_visible(pointer_pos, screen_rect) {
-        return actions;
-    }
-
-    egui::Area::new(egui::Id::new("custom_titlebar"))
-        .fixed_pos(screen_rect.min)
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            ui.set_width(screen_rect.width());
-            egui::Frame::NONE
-                .fill(ui.visuals().panel_fill)
-                .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                .corner_radius(egui::CornerRadius {
-                    nw: WINDOW_CORNER_RADIUS,
-                    ne: WINDOW_CORNER_RADIUS,
-                    sw: 0,
-                    se: 0,
-                })
-                .inner_margin(egui::Margin::symmetric(10, 3))
-                .multiply_with_opacity(TITLEBAR_OPACITY)
-                .show(ui, |ui| {
-                    ui.set_height(TITLEBAR_HEIGHT);
-                    titlebar_contents(ui, show_playlist, &mut actions);
-                });
-        });
-
-    actions
-}
-
-#[cfg(target_os = "macos")]
-fn titlebar_contents(ui: &mut egui::Ui, show_playlist: bool, actions: &mut TitlebarActions) {
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        let close = traffic_light_button(ui, egui::Color32::from_rgb(255, 95, 87), "×", "Close");
-        let minimize =
-            traffic_light_button(ui, egui::Color32::from_rgb(255, 189, 46), "−", "Minimize");
-        let maximize =
-            traffic_light_button(ui, egui::Color32::from_rgb(39, 201, 63), "+", "Maximize");
-
-        if close.clicked() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        if minimize.clicked() {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-        }
-        if maximize.clicked() {
-            toggle_maximized(ui.ctx());
-        }
-
-        ui.add_space(8.0);
-        let drag_width = (ui.available_width() - titlebar_app_buttons_width(ui)).max(0.0);
-        drag_region_with_width(ui, drag_width);
-        titlebar_app_buttons(ui, show_playlist, actions);
-    });
-}
-
 #[cfg(not(target_os = "macos"))]
-fn titlebar_contents(ui: &mut egui::Ui, show_playlist: bool, actions: &mut TitlebarActions) {
-    ui.horizontal(|ui| {
-        let button_width = titlebar_app_buttons_width(ui)
-            + ui.spacing().item_spacing.x
-            + ui.spacing().interact_size.x * 3.0
-            + ui.spacing().item_spacing.x * 2.0;
-        let drag_width = (ui.available_width() - button_width).max(0.0);
-        drag_region_with_width(ui, drag_width);
-        titlebar_app_buttons(ui, show_playlist, actions);
-        if ui.button("−").on_hover_text("Minimize").clicked() {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-        }
-        if ui.button("□").on_hover_text("Maximize").clicked() {
-            toggle_maximized(ui.ctx());
-        }
-        if ui.button("×").on_hover_text("Close").clicked() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-    });
-}
-
-fn titlebar_app_buttons_width(ui: &egui::Ui) -> f32 {
-    TITLEBAR_BUTTON_SIZE * 2.0 + ui.spacing().item_spacing.x
-}
-
-fn titlebar_app_buttons(ui: &mut egui::Ui, show_playlist: bool, actions: &mut TitlebarActions) {
-    if ui
-        .add_sized(
-            [TITLEBAR_BUTTON_SIZE, TITLEBAR_BUTTON_SIZE],
-            egui::Button::new("☰").selected(show_playlist),
-        )
-        .on_hover_text(t!("playlist").to_string())
-        .clicked()
-    {
-        actions.toggle_playlist = true;
-    }
-    if ui
-        .add_sized(
-            [TITLEBAR_BUTTON_SIZE, TITLEBAR_BUTTON_SIZE],
-            egui::Button::new("⚙"),
-        )
-        .on_hover_text(t!("settings").to_string())
-        .clicked()
-    {
-        actions.toggle_settings = true;
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn traffic_light_button(
-    ui: &mut egui::Ui,
-    color: egui::Color32,
-    symbol: &'static str,
-    hover_text: &'static str,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
-    let radius = if response.hovered() { 6.2 } else { 5.8 };
-    ui.painter()
-        .circle_filled(rect.center(), radius, color.gamma_multiply(0.95));
-    if response.hovered() {
-        draw_traffic_light_symbol(ui.painter(), rect, symbol);
-    }
-    response.on_hover_text(hover_text)
-}
-
-#[cfg(target_os = "macos")]
-fn draw_traffic_light_symbol(painter: &egui::Painter, rect: egui::Rect, symbol: &str) {
-    painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        symbol,
-        egui::FontId::proportional(9.0),
-        TRAFFIC_LIGHT_SYMBOL_COLOR,
-    );
-}
-
-fn drag_region_with_width(ui: &mut egui::Ui, width: f32) {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(width, TITLEBAR_HEIGHT - 6.0),
-        egui::Sense::drag(),
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        "Morn",
-        egui::FontId::proportional(13.0),
-        ui.visuals().text_color(),
-    );
-    if response.double_clicked() {
-        toggle_maximized(ui.ctx());
-    } else if response.drag_started() {
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-    }
-}
-
-fn toggle_maximized(ctx: &egui::Context) {
-    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-}
-
 fn show_resize_handles(ctx: &egui::Context, screen_rect: egui::Rect) {
     // 8 个边/角 handle 合并到 1 个 Foreground Area, 8 倍的合成/布局/
     // 命中测试缩成 1 份, resize 拖动时收益最明显。
@@ -207,6 +70,8 @@ fn show_resize_handles(ctx: &egui::Context, screen_rect: egui::Rect) {
             for (tag, direction, screen_handle_rect) in resize_handles(screen_rect) {
                 let local_rect = screen_handle_rect.translate(-origin);
                 let id = ui.id().with(("resize_handle", tag));
+                // Handles are transparent hit regions; BeginResize delegates the
+                // actual drag to the platform window.
                 let response = ui.interact(local_rect, id, egui::Sense::click_and_drag());
                 if response.drag_started() {
                     ui.ctx()
@@ -216,9 +81,11 @@ fn show_resize_handles(ctx: &egui::Context, screen_rect: egui::Rect) {
         });
 }
 
+#[cfg(not(target_os = "macos"))]
 fn resize_handles(
     screen_rect: egui::Rect,
 ) -> [(&'static str, egui::ResizeDirection, egui::Rect); 8] {
+    // Edges exclude the corner squares so diagonal resize targets win at corners.
     let h = WINDOW_RESIZE_HANDLE;
     let left = screen_rect.left();
     let right = screen_rect.right();
@@ -275,6 +142,224 @@ fn resize_handles(
     ]
 }
 
+pub fn show_custom_titlebar(
+    ctx: &egui::Context,
+    show_playlist: bool,
+    show_settings: bool,
+) -> TitlebarActions {
+    let mut actions = TitlebarActions::default();
+    let screen_rect = ctx.content_rect();
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Paint window background with rounded corners first (for transparent window)
+        paint_window_background(ctx);
+
+        // Show resize handles around the edge
+        show_resize_handles(ctx, screen_rect);
+    }
+
+    let opacity = titlebar_opacity(ctx, screen_rect);
+    if opacity <= 0.01 {
+        return actions;
+    }
+
+    egui::Area::new(egui::Id::new("custom_titlebar"))
+        .fixed_pos(screen_rect.min)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            ui.set_width(screen_rect.width());
+            egui::Frame::NONE
+                .fill(titlebar_fill(ui))
+                // 标题栏上方两个圆角与窗口一致，下方两个是直角
+                .corner_radius(egui::CornerRadius {
+                    nw: WINDOW_CORNER_RADIUS,
+                    ne: WINDOW_CORNER_RADIUS,
+                    sw: 0,
+                    se: 0,
+                })
+                .inner_margin(egui::Margin::symmetric(
+                    TITLEBAR_INNER_MARGIN_X,
+                    TITLEBAR_INNER_MARGIN_Y,
+                ))
+                .multiply_with_opacity(opacity)
+                .show(ui, |ui| {
+                    ui.set_height(TITLEBAR_HEIGHT);
+                    titlebar_contents(ui, show_playlist, show_settings, opacity, &mut actions);
+                });
+        });
+
+    actions
+}
+
+fn titlebar_opacity(ctx: &egui::Context, screen_rect: egui::Rect) -> f32 {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = screen_rect;
+        if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+            0.0
+        } else {
+            1.0
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let pointer_pos = ctx.input(|i| i.pointer.hover_pos());
+        let visible = titlebar_visible(pointer_pos, screen_rect);
+        ctx.animate_bool_with_time(
+            egui::Id::new("custom_titlebar_opacity"),
+            visible,
+            TITLEBAR_FADE_TIME,
+        )
+    }
+}
+
+fn titlebar_fill(ui: &egui::Ui) -> egui::Color32 {
+    ui.visuals().window_fill.to_opaque()
+}
+
+fn titlebar_contents(
+    ui: &mut egui::Ui,
+    show_playlist: bool,
+    show_settings: bool,
+    opacity: f32,
+    actions: &mut TitlebarActions,
+) {
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        #[cfg(target_os = "macos")]
+        {
+            // Keep egui content out of the native traffic-light cluster, matching
+            // Translator's `.mac-traffic-light-spacer`.
+            ui.add_space(NATIVE_TRAFFIC_LIGHT_SPACER_WIDTH);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            ui.add_space(0.0);
+        }
+
+        // App actions live on the right; the rest of the strip is the drag region.
+        let buttons_width = titlebar_app_buttons_width(ui);
+        let drag_width = (ui.available_width() - buttons_width).max(0.0);
+        drag_region(ui, drag_width, opacity);
+        titlebar_app_buttons(ui, show_playlist, show_settings, opacity, actions);
+    });
+}
+
+fn toggle_maximized(ctx: &egui::Context) {
+    // egui exposes maximized state as an optional viewport value; missing state is
+    // treated as not maximized so the command remains a toggle.
+    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+}
+
+fn titlebar_app_buttons_width(ui: &egui::Ui) -> f32 {
+    TITLEBAR_BUTTON_SIZE * 2.0 + ui.spacing().item_spacing.x * 2.0 + TITLEBAR_TRAILING_MARGIN
+}
+
+fn titlebar_app_buttons(
+    ui: &mut egui::Ui,
+    show_playlist: bool,
+    show_settings: bool,
+    opacity: f32,
+    actions: &mut TitlebarActions,
+) {
+    let playlist = titlebar_icon_button(ui, "☰", show_playlist, opacity).on_hover_text(
+        crate::shortcuts::shortcut_tooltip(
+            t!("playlist"),
+            crate::shortcuts::playlist_shortcut_label(),
+        ),
+    );
+    if playlist.clicked() {
+        actions.toggle_playlist = true;
+    }
+
+    let settings = titlebar_icon_button(ui, "⚙", show_settings, opacity).on_hover_text(
+        crate::shortcuts::shortcut_tooltip(
+            t!("settings"),
+            crate::shortcuts::settings_shortcut_label(),
+        ),
+    );
+    if settings.clicked() {
+        actions.toggle_settings = true;
+    }
+
+    ui.add_space(TITLEBAR_TRAILING_MARGIN);
+}
+
+fn titlebar_icon_button(
+    ui: &mut egui::Ui,
+    icon: &'static str,
+    selected: bool,
+    opacity: f32,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(TITLEBAR_BUTTON_SIZE, TITLEBAR_BUTTON_SIZE),
+        egui::Sense::click_and_drag(),
+    );
+    let icon_color = if selected {
+        ui.visuals().selection.stroke.color.gamma_multiply(opacity)
+    } else {
+        ui.visuals().text_color().gamma_multiply(opacity)
+    };
+    let bg_fill = if selected {
+        Some(ui.visuals().selection.bg_fill.gamma_multiply(opacity))
+    } else if response.hovered() {
+        Some(
+            ui.visuals()
+                .widgets
+                .hovered
+                .weak_bg_fill
+                .gamma_multiply(opacity),
+        )
+    } else {
+        None
+    };
+
+    if let Some(fill) = bg_fill {
+        ui.painter().rect_filled(
+            rect.shrink(1.0),
+            egui::CornerRadius::same(crate::visuals::CONTROL_CORNER_RADIUS),
+            fill,
+        );
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(14.0),
+        icon_color,
+    );
+    response
+}
+
+fn drag_region(ui: &mut egui::Ui, width: f32, opacity: f32) {
+    // Native titlebar drag stops working once content extends under it, so the
+    // strip itself starts a window drag; double-click mirrors the native zoom.
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(width, TITLEBAR_HEIGHT),
+        egui::Sense::click_and_drag(),
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "Morn",
+        egui::FontId::proportional(12.0),
+        ui.visuals()
+            .widgets
+            .noninteractive
+            .fg_stroke
+            .color
+            .gamma_multiply(opacity),
+    );
+    if response.double_clicked() {
+        toggle_maximized(ui.ctx());
+    } else if response.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -300,11 +385,11 @@ mod tests {
             .unwrap();
 
         assert!(source.contains("ViewportCommand::StartDrag"));
-        assert!(source.contains("ViewportCommand::Close"));
-        assert!(source.contains("ViewportCommand::Minimized(true)"));
         assert!(source.contains("ViewportCommand::Maximized"));
         assert!(source.contains("ViewportCommand::BeginResize"));
-        assert!(source.contains("TITLEBAR_OPACITY"));
+        // Non-macOS custom titlebar still owns background and resize handles.
+        assert!(source.contains("show_resize_handles"));
+        assert!(source.contains("paint_window_background"));
     }
 
     #[test]
@@ -318,108 +403,51 @@ mod tests {
         assert!(source.contains("toggle_playlist"));
         assert!(source.contains("toggle_settings"));
         assert!(source.contains("titlebar_app_buttons"));
-        assert!(source.contains("Button::new(\"☰\")"));
-        assert!(source.contains("Button::new(\"⚙\")"));
+        assert!(source.contains("titlebar_icon_button(ui, \"☰\""));
+        assert!(source.contains("titlebar_icon_button(ui, \"⚙\""));
+        assert!(source.contains("titlebar_icon_button(ui, \"⚙\", show_settings"));
+        assert!(source.contains("ui.visuals().selection.bg_fill"));
+        assert!(source.contains("ui.visuals().selection.stroke.color"));
+        assert!(source.contains(
+            "TITLEBAR_TRAILING_MARGIN: f32 = crate::visuals::FLOATING_PANEL_INNER_MARGIN_X as f32"
+        ));
+        assert!(source.contains("ui.spacing().item_spacing.x * 2.0"));
+        // Both action buttons share one fixed square size.
+        assert!(source.contains("egui::vec2(TITLEBAR_BUTTON_SIZE, TITLEBAR_BUTTON_SIZE)"));
+        assert!(source.contains("TITLEBAR_TRAILING_MARGIN"));
     }
 
     #[test]
-    fn resize_handles_cover_all_eight_directions_at_window_edges() {
-        let screen = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
-        let h = super::WINDOW_RESIZE_HANDLE;
-        let handles = super::resize_handles(screen);
-        let mut seen = [false; 8];
-        for (_tag, d, _) in handles {
-            let idx = match d {
-                egui::ResizeDirection::North => 0,
-                egui::ResizeDirection::South => 1,
-                egui::ResizeDirection::East => 2,
-                egui::ResizeDirection::West => 3,
-                egui::ResizeDirection::NorthWest => 4,
-                egui::ResizeDirection::NorthEast => 5,
-                egui::ResizeDirection::SouthWest => 6,
-                egui::ResizeDirection::SouthEast => 7,
-            };
-            assert!(!seen[idx], "duplicate direction {d:?}");
-            seen[idx] = true;
-        }
-        assert!(seen.iter().all(|s| *s), "missing direction(s)");
-
-        let find = |dir: egui::ResizeDirection| -> egui::Rect {
-            handles
-                .iter()
-                .find(|(_, d, _)| *d == dir)
-                .map(|(_, _, r)| *r)
-                .unwrap()
-        };
-        assert_eq!(
-            find(egui::ResizeDirection::NorthWest),
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(h, h))
-        );
-        assert_eq!(
-            find(egui::ResizeDirection::NorthEast),
-            egui::Rect::from_min_max(egui::pos2(800.0 - h, 0.0), egui::pos2(800.0, h))
-        );
-        assert_eq!(
-            find(egui::ResizeDirection::SouthWest),
-            egui::Rect::from_min_max(egui::pos2(0.0, 600.0 - h), egui::pos2(h, 600.0))
-        );
-        assert_eq!(
-            find(egui::ResizeDirection::SouthEast),
-            egui::Rect::from_min_max(egui::pos2(800.0 - h, 600.0 - h), egui::pos2(800.0, 600.0))
-        );
-        let n = find(egui::ResizeDirection::North);
-        assert_eq!(n.min, egui::pos2(h, 0.0));
-        assert_eq!(n.max, egui::pos2(800.0 - h, h));
-        let w = find(egui::ResizeDirection::West);
-        assert_eq!(w.min, egui::pos2(0.0, h));
-        assert_eq!(w.max, egui::pos2(h, 600.0 - h));
-    }
-
-    #[test]
-    fn show_resize_handles_uses_a_single_foreground_area() {
+    fn macos_titlebar_uses_native_traffic_lights_with_spacer() {
         let source = include_str!("titlebar.rs")
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        assert_eq!(
-            source.matches("\"window_resize_handle\"").count(),
-            0,
-            "old per-handle Area id string is still present"
-        );
-        assert!(
-            source.contains("Id::new(\"window_resize_handles\")"),
-            "merged Area id missing"
-        );
-        assert_eq!(
-            source.matches("ui.interact(").count(),
-            1,
-            "expected exactly one ui.interact call site (in a loop)"
-        );
+        assert!(source.contains("NATIVE_TRAFFIC_LIGHT_SPACER_WIDTH"));
+        assert!(source.contains("ui.add_space(NATIVE_TRAFFIC_LIGHT_SPACER_WIDTH)"));
+        assert!(source.contains("viewport().fullscreen.unwrap_or(false)"));
+        assert!(source.contains("0.0"));
+        assert!(!source.contains("traffic_light_button"));
+        assert!(!source.contains("TrafficLightSymbol"));
+        assert!(!source.contains("draw_traffic_light_symbol"));
     }
 
     #[test]
-    fn titlebar_is_compact_centered_and_shows_hover_symbols() {
-        assert!(std::hint::black_box(super::TITLEBAR_HEIGHT) <= 28.0);
-
+    fn titlebar_action_buttons_do_not_use_default_button_frames() {
         let source = include_str!("titlebar.rs")
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        assert!(source.contains("left_to_right(egui::Align::Center)"));
-        assert!(source.contains("draw_traffic_light_symbol"));
-        assert!(source.contains("\"×\""));
-        assert!(source.contains("\"−\""));
-    }
-
-    #[test]
-    fn transparent_window_paints_rounded_background() {
-        let source = include_str!("titlebar.rs")
-            .split("#[cfg(test)]")
+        let button_source = source
+            .split("fn titlebar_icon_button")
+            .nth(1)
+            .unwrap()
+            .split("fn drag_region")
             .next()
             .unwrap();
-        assert!(source.contains("paint_window_background"));
-        assert!(source.contains("WINDOW_CORNER_RADIUS"));
-        assert!(source.contains("LayerId::background"));
-        assert!(source.contains("rect_filled"));
+        assert!(source.contains("fn titlebar_icon_button"));
+        assert!(source.contains("ui.allocate_exact_size"));
+        assert!(button_source.contains("egui::Sense::click_and_drag()"));
+        assert!(!source.contains("egui::Button::new"));
     }
 }

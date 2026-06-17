@@ -1,3 +1,10 @@
+//! FFmpeg-backed video decoding.
+//!
+//! `VideoDecoder` owns demuxing, codec setup, optional hardware decode, precise
+//! seek catch-up, and RGBA conversion.  Callers see a small pull-based API so the
+//! engine can decide threading, frame queues, and presentation timing without
+//! depending on FFmpeg packet details.
+
 use crate::error::MediaError;
 use crate::frame::VideoFrame;
 use crate::hwaccel::{DecodeOptions, HwCallbackData, HwDeviceContext};
@@ -32,7 +39,7 @@ pub struct VideoDecoder {
 }
 
 impl VideoDecoder {
-    pub fn open(path: &Path) -> Result<Self, MediaError> {
+    pub fn open_path(path: &Path) -> Result<Self, MediaError> {
         Self::open_with_options(path, DecodeOptions::default())
     }
 
@@ -171,52 +178,68 @@ impl VideoDecoder {
     /// 返回下一帧 RGBA, 文件结束返回 Ok(None)。
     pub fn next_frame(&mut self) -> Result<Option<VideoFrame>, MediaError> {
         loop {
-            let mut decoded = FfVideo::empty();
-            if self.decoder.receive_frame(&mut decoded).is_ok() {
-                // 精确 seek 的追赶期: 目标前的帧只解码不产出, 跳过昂贵的下载/缩放/拷贝。
-                if let Some(target) = self.skip_until_ms {
-                    let pts = decoded.pts().unwrap_or(0);
-                    let pts_ms = (pts as f64 * self.time_base * 1000.0).max(0.0) as u64;
-                    if pts_ms < target {
-                        continue;
-                    }
-                    self.skip_until_ms = None;
+            if let Some(decoded) = self.receive_decoded_video() {
+                if self.skip_precise_seek_frame(&decoded) {
+                    continue;
                 }
-                let frame = if self.is_hardware && self.frame_is_hw(&decoded) {
-                    self.decoded_in_hardware = true;
-                    self.download_and_scale(&decoded)?
-                } else {
-                    self.decoded_in_hardware = false;
-                    let fmt = decoded.format(); // SAFE accessor — no transmute
-                    self.ensure_scaler(fmt)?;
-                    self.scale_software(&decoded)?
-                };
-                return Ok(Some(frame));
+                return self.convert_decoded_frame(&decoded).map(Some);
             }
             if self.eof {
                 return Ok(None);
             }
-            match self.read_video_packet()? {
-                Some(packet) => {
-                    self.decoder.send_packet(&packet)?;
-                }
-                None => {
-                    self.decoder.send_eof()?;
-                    self.eof = true;
-                }
+            self.feed_decoder()?;
+        }
+    }
+
+    fn receive_decoded_video(&mut self) -> Option<FfVideo> {
+        let mut decoded = FfVideo::empty();
+        self.decoder
+            .receive_frame(&mut decoded)
+            .is_ok()
+            .then_some(decoded)
+    }
+
+    fn skip_precise_seek_frame(&mut self, decoded: &FfVideo) -> bool {
+        let Some(target) = self.skip_until_ms else {
+            return false;
+        };
+        if self.frame_pts_ms(decoded) < target {
+            return true;
+        }
+        self.skip_until_ms = None;
+        false
+    }
+
+    fn convert_decoded_frame(&mut self, decoded: &FfVideo) -> Result<VideoFrame, MediaError> {
+        if self.is_hardware && self.frame_is_hw(decoded) {
+            self.decoded_in_hardware = true;
+            self.download_and_scale(decoded)
+        } else {
+            self.decoded_in_hardware = false;
+            let fmt = decoded.format(); // SAFE accessor — no transmute
+            self.ensure_scaler(fmt)?;
+            self.scale_software(decoded)
+        }
+    }
+
+    fn feed_decoder(&mut self) -> Result<(), MediaError> {
+        match self.read_video_packet()? {
+            Some(packet) => self.decoder.send_packet(&packet)?,
+            None => {
+                self.decoder.send_eof()?;
+                self.eof = true;
             }
         }
+        Ok(())
     }
 
     fn read_video_packet(&mut self) -> Result<Option<ff::codec::packet::Packet>, MediaError> {
         let mut packet = ff::codec::packet::Packet::empty();
         loop {
-            match packet.read(&mut self.ictx) {
-                Ok(()) => {
-                    if packet.stream() == self.stream_index {
-                        return Ok(Some(packet));
-                    }
-                }
+            let packet_result = packet.read(&mut self.ictx);
+            match packet_result {
+                Ok(()) if packet.stream() == self.stream_index => return Ok(Some(packet)),
+                Ok(()) => {}
                 Err(ff::Error::Eof) => return Ok(None),
                 Err(e) => return Err(e.into()),
             }
@@ -260,8 +283,7 @@ impl VideoDecoder {
         let scaler = self.scaler.as_mut().expect("scaler 已构建");
         let mut rgba = FfVideo::empty();
         scaler.run(decoded, &mut rgba)?;
-        let pts = decoded.pts().unwrap_or(0);
-        let pts_ms = (pts as f64 * self.time_base * 1000.0).max(0.0) as u64;
+        let pts_ms = self.frame_pts_ms(decoded);
         let stride = rgba.stride(0);
         let row_bytes = (self.width * 4) as usize;
         let src = rgba.data(0);
@@ -271,6 +293,11 @@ impl VideoDecoder {
             out.extend_from_slice(&src[start..start + row_bytes]);
         }
         Ok(VideoFrame::new(self.width, self.height, pts_ms, out))
+    }
+
+    fn frame_pts_ms(&self, frame: &FfVideo) -> u64 {
+        let pts = frame.pts().unwrap_or(0);
+        (pts as f64 * self.time_base * 1000.0).max(0.0) as u64
     }
 }
 

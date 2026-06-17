@@ -11,12 +11,7 @@ fn decodes_correctly_regardless_of_hw_availability() {
     assert!(path.exists(), "先运行 tests/gen_fixture.sh");
 
     let mut dec = VideoDecoder::open_with_options(&path, DecodeOptions::default()).unwrap();
-    let mut count = 0;
-    while let Some(f) = dec.next_frame().unwrap() {
-        assert_eq!(f.rgba.len(), 160 * 120 * 4);
-        count += 1;
-    }
-    assert!((23..=27).contains(&count));
+    assert_sample_frame_count(decode_frame_count(&mut dec, true));
     eprintln!(
         "解码路径: {}",
         if dec.is_hardware() {
@@ -35,11 +30,7 @@ fn forcing_software_still_works() {
     };
     let mut dec = VideoDecoder::open_with_options(&path, opts).unwrap();
     assert!(!dec.is_hardware());
-    let mut count = 0;
-    while dec.next_frame().unwrap().is_some() {
-        count += 1;
-    }
-    assert!((23..=27).contains(&count));
+    assert_sample_frame_count(decode_frame_count(&mut dec, false));
 }
 
 #[test]
@@ -52,4 +43,19 @@ fn observed_hardware_matches_forced_software() {
     let mut dec = VideoDecoder::open_with_options(&path, opts).unwrap();
     assert!(dec.next_frame().unwrap().is_some());
     assert!(!dec.observed_hardware());
+}
+
+fn decode_frame_count(decoder: &mut VideoDecoder, check_rgba_len: bool) -> usize {
+    let mut count = 0;
+    while let Some(frame) = decoder.next_frame().unwrap() {
+        if check_rgba_len {
+            assert_eq!(frame.rgba.len(), 160 * 120 * 4);
+        }
+        count += 1;
+    }
+    count
+}
+
+fn assert_sample_frame_count(count: usize) {
+    assert!((23..=27).contains(&count));
 }

@@ -1,3 +1,10 @@
+//! Minimal playback state machine.
+//!
+//! The engine keeps resource teardown, clocks, and playlist changes elsewhere; this
+//! module only validates public playback transitions.  Invalid transitions are
+//! reported as data so callers can decide whether to ignore an idempotent command or
+//! surface a diagnostic.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackState {
     Stopped,

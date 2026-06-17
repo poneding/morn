@@ -1,3 +1,9 @@
+//! Decoded media frame containers.
+//!
+//! These structs carry already-converted samples across crate boundaries: video is
+//! RGBA plus PTS for texture upload, and audio is interleaved `f32` plus PTS for
+//! clock anchoring and playback-rate conversion.
+
 /// 解码并转换为 RGBA 后的视频帧, 可直接上传 GPU。
 #[derive(Debug, Clone)]
 pub struct VideoFrame {

@@ -1,3 +1,9 @@
+//! Lightweight playback snapshot for UI controls.
+//!
+//! `Timeline` is copied out of `Player` once per frame so controls, shortcuts, and
+//! overlays can read consistent position, duration, state, volume, and rate values
+//! without borrowing the engine during egui layout.
+
 use player_core::PlaybackState;
 
 /// UI 每帧读取的播放状态快照。
