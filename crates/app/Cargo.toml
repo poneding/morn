@@ -10,8 +10,28 @@ name = "morn"
 path = "src/main.rs"
 
 [dependencies]
-eframe = "0.34"
+# 关闭 eframe 默认 features 后改用 `wgpu_no_default_features`: 该 feature 提供 wgpu
+# 渲染后端代码, 但不强制启用 `egui-wgpu/default`。后者会带出
+# `macos-window-resize-jitter-fix`, 而该 feature 在 egui 0.30+ 上是 macOS 从顶部/左侧
+# 拉伸窗口卡顿/卡死的元凶(egui#8043 回归)——它在 resize 时反复切换
+# `CAMetalLayer.presentsWithTransaction` 并重建 surface, 顶部/左侧因窗口移动每帧都要
+# 同步 present+提交事务而明显卡顿, 右/下侧窗口不动故无感。Metal 后端由下方 `wgpu`
+# 直接依赖提供, 故此处可安全去掉。切勿改回 `eframe = "0.34"` 默认配置。
+#
+# eframe 的 `default` 里还含一个内部引用 `winit/default`(启用 winit 默认 features),
+# 它不被 eframe 对外暴露, 无法在下方 features 里列出; 故改为下方直接依赖 `winit` 来
+# 等价恢复(rwh_06 + 各平台后端)。
+eframe = { version = "0.34", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "wayland",
+    "web_screen_reader",
+    "wgpu_no_default_features",
+    "x11",
+] }
 egui = "0.34"
+# 仅用于恢复 winit 默认 features(eframe 关闭 default 后丢失), 不在代码中直接使用。
+winit = "0.30"
 wgpu = "29.0"
 engine = { path = "../engine" }
 player-core = { path = "../player-core" }
