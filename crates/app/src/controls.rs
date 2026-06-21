@@ -109,7 +109,11 @@ pub fn controls_bar(ui: &mut egui::Ui, input: ControlsBarInput<'_>) -> Vec<Comma
             .show_value(false)
             .trailing_fill(true),
     );
-    if resp.changed() {
+    // 仅在"拖动松手"或"非拖动交互(键盘/滚轮微调)"时 seek, 不要在拖动过程中每帧 seek。
+    // 否则一次拖动会被展开成一连串 SeekTo, 每次都触发视频/音频重定位 + seek 闸门冻结,
+    // 既导致拖动抖动, 又会在按住在进度条左端(位置 0)时把播放位置反复拉回 0——
+    // 时钟刚 creep 几毫秒就被下一次 SeekTo(0) 重置, 表现为"播几秒又回到开头重新播"。
+    if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
         cmds.push(Command::SeekTo(pos as u64));
     }
 
