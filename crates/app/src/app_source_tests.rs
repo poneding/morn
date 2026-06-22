@@ -225,9 +225,8 @@ fn settings_and_playlist_buttons_live_in_titlebar() {
         .next()
         .unwrap();
 
-    assert!(titlebar_source.contains("titlebar_icon_button(ui, \"⚙\""));
-    assert!(titlebar_source.contains("titlebar_icon_button(ui, \"☰\", show_playlist"));
-    assert!(titlebar_source.contains("titlebar_icon_button(ui, \"⚙\", show_settings"));
+    assert!(titlebar_source.contains("crate::symbols::PLAYLIST"));
+    assert!(titlebar_source.contains("crate::symbols::SETTINGS"));
     assert!(titlebar_source.contains("fn titlebar_icon_button"));
     assert!(!titlebar_source.contains("egui::Button::new"));
     assert!(source.contains("actions.toggle_settings"));

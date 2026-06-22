@@ -21,7 +21,7 @@ use eframe::egui::{self, Color32, CornerRadius, Shadow, Stroke};
 const WIDGET_RADIUS: u8 = crate::visuals::CONTROL_CORNER_RADIUS;
 const WINDOW_RADIUS: u8 = crate::visuals::PANEL_CORNER_RADIUS;
 /// 时间轴/音量轨道的视觉粗细（不改控件占位高度，故不影响布局）。
-const SLIDER_RAIL_HEIGHT: f32 = 5.0;
+const SLIDER_RAIL_HEIGHT: f32 = 4.0;
 
 /// 一套配色的语义令牌。颜色之外的结构（圆角 / 阴影 / 描边粗细）由
 /// [`Palette::apply`] 统一处理，两套配色共享。
@@ -56,25 +56,25 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// 石墨暖橙（暗）—— 应用唯一主题（仅深色）。
+/// 石墨金属（暗）—— 应用唯一主题（仅深色）。
 const PALETTE_DARK: Palette = Palette {
     is_dark: true,
-    base: rgb(0x1B, 0x1A, 0x18),
-    surface: rgb(0x21, 0x1F, 0x1C),
-    sunken: rgb(0x13, 0x12, 0x10),
-    faint: rgb(0x23, 0x22, 0x20),
-    text: rgb(0xE6, 0xE2, 0xDB),
-    text_muted: rgb(0xB8, 0xB3, 0xAA),
-    text_strong: rgb(0xF5, 0xF2, 0xEC),
-    surface_idle: rgb(0x2C, 0x29, 0x25),
-    surface_hover: rgb(0x38, 0x34, 0x2E),
-    surface_active: rgb(0x44, 0x3F, 0x37),
-    rail: rgb(0x46, 0x42, 0x3B),
-    border: rgb(0x34, 0x31, 0x2C),
-    accent: rgb(0xFF, 0x9F, 0x0A),
-    on_accent: rgb(0x1B, 0x14, 0x10),
-    warn: rgb(0xF5, 0xB5, 0x44),
-    error: rgb(0xFF, 0x6B, 0x5E),
+    base: rgb(0x18, 0x18, 0x17),
+    surface: rgb(0x25, 0x24, 0x21),
+    sunken: rgb(0x10, 0x10, 0x0F),
+    faint: rgb(0x2A, 0x29, 0x26),
+    text: rgb(0xE8, 0xE3, 0xDA),
+    text_muted: rgb(0xB7, 0xB0, 0xA4),
+    text_strong: rgb(0xFF, 0xFA, 0xF0),
+    surface_idle: rgb(0x32, 0x30, 0x2C),
+    surface_hover: rgb(0x3E, 0x3B, 0x35),
+    surface_active: rgb(0x24, 0x22, 0x20),
+    rail: rgb(0x40, 0x3D, 0x37),
+    border: rgb(0x12, 0x12, 0x10),
+    accent: rgb(0xD8, 0xA1, 0x40),
+    on_accent: rgb(0x16, 0x12, 0x0D),
+    warn: rgb(0xE7, 0xB7, 0x54),
+    error: rgb(0xEF, 0x73, 0x65),
 };
 
 /// 安装自定义主题。应用**仅深色**: 两个主题槽都写入深色 `Style`, 这样即便
@@ -104,12 +104,12 @@ impl Palette {
         v.selection.bg_fill = self.accent;
         v.selection.stroke = Stroke::new(1.0, self.on_accent);
 
-        // 窗口 / 浮层：统一圆角、细描边、更柔更大的阴影
+        // 窗口 / 浮层：统一圆角、细描边、克制阴影。
         v.window_corner_radius = window_radius;
         v.menu_corner_radius = widget_radius;
         v.window_stroke = Stroke::new(1.0, self.border);
-        v.window_shadow = self.shadow([0, 10], 28, 120, 38);
-        v.popup_shadow = self.shadow([0, 6], 18, 100, 30);
+        v.window_shadow = self.shadow([0, 7], 18, 135, 38);
+        v.popup_shadow = self.shadow([0, 5], 14, 115, 30);
 
         v.slider_trailing_fill = true;
         v.handle_shape = egui::style::HandleShape::Circle;
@@ -126,7 +126,7 @@ impl Palette {
         // 空闲按钮(weak_bg_fill) / 滑条轨 + 滑块静止(bg_fill)
         w.inactive.weak_bg_fill = self.surface_idle;
         w.inactive.bg_fill = self.rail;
-        w.inactive.bg_stroke = Stroke::NONE;
+        w.inactive.bg_stroke = Stroke::new(1.0, self.border);
         w.inactive.fg_stroke = Stroke::new(1.0, self.text_muted);
         w.inactive.corner_radius = widget_radius;
         w.inactive.expansion = 0.0;
@@ -136,7 +136,7 @@ impl Palette {
         // / 复选框在 hover/选中时是醒目的橙色而非纯白/纯黑（看得清状态）。
         w.hovered.weak_bg_fill = self.surface_hover;
         w.hovered.bg_fill = self.accent;
-        w.hovered.bg_stroke = Stroke::NONE;
+        w.hovered.bg_stroke = Stroke::new(1.0, self.border);
         w.hovered.fg_stroke = Stroke::new(1.5, self.text_strong);
         w.hovered.corner_radius = widget_radius;
         w.hovered.expansion = 0.0;
@@ -144,7 +144,7 @@ impl Palette {
         // active：按下 / 拖动，滑块/复选框仍是 amber，描边也去掉
         w.active.weak_bg_fill = self.surface_active;
         w.active.bg_fill = self.accent;
-        w.active.bg_stroke = Stroke::NONE;
+        w.active.bg_stroke = Stroke::new(1.0, self.border);
         w.active.fg_stroke = Stroke::new(1.5, self.text_strong);
         w.active.corner_radius = widget_radius;
         w.active.expansion = 0.0;
@@ -152,7 +152,7 @@ impl Palette {
         // open：下拉 / 菜单按钮展开态
         w.open.weak_bg_fill = self.surface_active;
         w.open.bg_fill = self.surface_active;
-        w.open.bg_stroke = Stroke::NONE;
+        w.open.bg_stroke = Stroke::new(1.0, self.border);
         w.open.fg_stroke = Stroke::new(1.0, self.text);
         w.open.corner_radius = widget_radius;
         w.open.expansion = 0.0;

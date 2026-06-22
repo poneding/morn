@@ -151,6 +151,11 @@ impl PlayerApp {
             ui.set_height(content_size.y);
             self.show_playlist_sheet_contents(ui, state, data, commands);
         });
+        crate::visuals::paint_panel_bevel(
+            ui,
+            frame.response.rect,
+            crate::visuals::PANEL_CORNER_RADIUS,
+        );
         frame.response.hovered() || frame.response.contains_pointer()
     }
 

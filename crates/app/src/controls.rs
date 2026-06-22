@@ -15,10 +15,10 @@ use engine::Timeline;
 use player_core::Command;
 use rust_i18n::t;
 
-pub const VOLUME_MENU_ICON: &str = "🔊";
-pub const MUTE_MENU_ICON: &str = "🔇";
-const PLAY_ICON: &str = "▶";
-const PAUSE_ICON: &str = "⏸";
+pub const VOLUME_MENU_ICON: &str = crate::symbols::VOLUME;
+pub const MUTE_MENU_ICON: &str = crate::symbols::MUTE;
+const PLAY_ICON: &str = crate::symbols::PLAY;
+const PAUSE_ICON: &str = crate::symbols::PAUSE;
 /// 控制栏所有图标按钮的固定大小（正方形），保持视觉统一。
 pub(crate) const CONTROL_BUTTON_SIZE: f32 = crate::visuals::ICON_BUTTON_SIZE;
 const VOLUME_POPUP_SLIDER_HEIGHT: f32 = 96.0;
@@ -54,7 +54,8 @@ pub fn controls_bar(ui: &mut egui::Ui, input: ControlsBarInput<'_>) -> Vec<Comma
     if ui
         .add_enabled(
             input.has_prev,
-            egui::Button::new("⏮").min_size(egui::vec2(CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)),
+            egui::Button::new(crate::symbols::PREV)
+                .min_size(egui::vec2(CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)),
         )
         .on_hover_text(crate::shortcuts::shortcut_tooltip(
             t!("prev"),
@@ -87,7 +88,8 @@ pub fn controls_bar(ui: &mut egui::Ui, input: ControlsBarInput<'_>) -> Vec<Comma
     if ui
         .add_enabled(
             input.has_next,
-            egui::Button::new("⏭").min_size(egui::vec2(CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)),
+            egui::Button::new(crate::symbols::NEXT)
+                .min_size(egui::vec2(CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)),
         )
         .on_hover_text(crate::shortcuts::shortcut_tooltip(
             t!("next"),
@@ -134,7 +136,7 @@ pub fn controls_bar(ui: &mut egui::Ui, input: ControlsBarInput<'_>) -> Vec<Comma
     if ui
         .add_sized(
             [CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE],
-            egui::Button::new("⛶"),
+            egui::Button::new(crate::symbols::FULLSCREEN),
         )
         .on_hover_text(crate::shortcuts::shortcut_tooltip(
             t!("fullscreen"),
@@ -246,9 +248,9 @@ pub fn subtitle_track_combo(ui: &mut egui::Ui, tracks: &[media::SubtitleTrack]) 
 mod tests {
     #[test]
     fn mute_icon_reflects_mute_and_zero_volume() {
-        assert_eq!(super::mute_icon(false, 50), "🔊");
-        assert_eq!(super::mute_icon(true, 50), "🔇");
-        assert_eq!(super::mute_icon(false, 0), "🔇");
+        assert_eq!(super::mute_icon(false, 50), crate::symbols::VOLUME);
+        assert_eq!(super::mute_icon(true, 50), crate::symbols::MUTE);
+        assert_eq!(super::mute_icon(false, 0), crate::symbols::MUTE);
     }
 
     #[test]
@@ -350,7 +352,7 @@ mod tests {
             .unwrap();
 
         assert!(source.contains("const CONTROL_BUTTON_SIZE"));
-        // 所有图标按钮(⏮/▶/⏸/⏭/🔊/⛶)都用固定正方形尺寸，视觉统一。
+        // 所有图标按钮都用固定正方形尺寸，视觉统一。
         assert!(source.contains("CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE"));
         assert!(source.contains("min_size(egui::vec2(CONTROL_BUTTON_SIZE"));
         assert!(!source.contains("toggled_icon_button_size"));

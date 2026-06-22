@@ -52,6 +52,23 @@ pub fn install_fonts(ctx: &egui::Context, locale: &str) {
         eprintln!("警告: 未找到系统中文字体, 中文可能无法显示");
     }
 
+    // 符号字体: 覆盖几何/箭头/技术符号(U+2500-27BF 等), 让 symbols.rs 里的 ◉▣▤↻
+    // 等图标在主 UI/CJK 字体缺字形时不至于显示成 tofu 方块。放在 Proportional 与
+    // Monospace 列表最末作为最后回退: 主字体优先, 仅在缺字形时才落到符号字体。
+    if let Some((key, font_data)) = load_first(SYMBOL_FONTS) {
+        fonts.font_data.insert(key.clone(), font_data.into());
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push(key.clone());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push(key);
+    }
+
     ctx.set_fonts(fonts);
 }
 
@@ -366,9 +383,39 @@ const TC_CJK_FONTS: &[FontCandidate] = &[
     },
 ];
 
+/// 符号字体候选(各平台): 覆盖几何/箭头/技术符号块, 给 symbols.rs 的 Unicode 图标兜底,
+/// 避免 ◉▣▤↻ 等在主 UI/CJK 字体缺字形时显示成 tofu 方块。
+#[cfg(target_os = "macos")]
+const SYMBOL_FONTS: &[FontCandidate] = &[FontCandidate {
+    key: "apple-symbols",
+    path: "/System/Library/Fonts/Apple Symbols.ttf",
+    index: 0,
+}]; // Apple Symbols 覆盖 ◉▣▤↻◌ 等几何符号块。
+#[cfg(target_os = "windows")]
+const SYMBOL_FONTS: &[FontCandidate] = &[FontCandidate {
+    key: "segoe-ui-symbol",
+    path: r"C:\Windows\Fonts\seguisym.ttf",
+    index: 0,
+}];
+#[cfg(target_os = "linux")]
+const SYMBOL_FONTS: &[FontCandidate] = &[
+    FontCandidate {
+        key: "dejavu-sans-symbols",
+        path: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        index: 0,
+    },
+    FontCandidate {
+        key: "noto-sans-symbols2",
+        path: "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+        index: 0,
+    },
+];
+
 // 其它平台无候选, 退回 egui 默认字体。
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 const UI_FONTS: &[FontCandidate] = &[];
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+const SYMBOL_FONTS: &[FontCandidate] = &[];
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 const MONO_FONTS: &[FontCandidate] = &[];
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -408,6 +455,17 @@ mod tests {
         assert_eq!(sc[0].index, 3);
         assert_eq!(tc[0].key, "pingfang-tc");
         assert_eq!(tc[0].index, 2);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_symbol_font_covers_unicode_icon_glyphs() {
+        // symbols.rs 的 ◉▣▤↻ 等几何符号需要符号字体兜底, 否则显示为 tofu 方块。
+        assert_eq!(super::SYMBOL_FONTS[0].key, "apple-symbols");
+        assert_eq!(
+            super::SYMBOL_FONTS[0].path,
+            "/System/Library/Fonts/Apple Symbols.ttf"
+        );
     }
 
     #[cfg(target_os = "linux")]

@@ -44,6 +44,9 @@ rust-i18n = "4"
 semver = "1"
 serde.workspace = true
 ureq = { version = "2", default-features = false, features = ["json", "tls"] }
+# 仅用于首帧拿到 NSView 句柄设置 layerContentsPlacement(掩盖 resize 旧帧拉伸抖动)。
+# Cargo.lock 中已是 eframe 的传递依赖 0.6.x, 不引入新版本。
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"

@@ -100,6 +100,7 @@ pub fn settings_window(
         .id(egui::Id::new("settings_window"))
         .title_bar(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
         .max_height(max_height)
@@ -124,6 +125,15 @@ pub fn settings_window(
                 },
             );
         });
+    // 设置面板与播放列表同属 Foreground; egui 同 Order 内的层级会随打开/点击顺序
+    // 动态变化(area.rs: 每次可见或被点击都 move_to_top), 无法保证设置始终在上。
+    // 故每帧显式把设置提到 Foreground 最上层, 确保它盖在播放列表之上。
+    ctx.memory_mut(|m| {
+        m.areas_mut().move_to_top(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("settings_window"),
+        ));
+    });
     set_settings_tab_state(ctx, active_tab);
 }
 
@@ -344,7 +354,7 @@ fn choose_screenshot_dir_button(
     if !ui
         .add_sized(
             [SETTINGS_ROW_HEIGHT, SETTINGS_ROW_HEIGHT],
-            egui::Button::new("📁"),
+            egui::Button::new(crate::symbols::FOLDER),
         )
         .on_hover_text(t!("choose_folder").to_string())
         .clicked()
@@ -371,7 +381,6 @@ fn updates_section(
     // Update preferences live beside the manual action so beta/stable checks use
     // the same flags whether they are started here or during app startup.
     update_action_row(ui, player, update_check);
-    current_version_row(ui, update_check.current_version());
     startup_update_check_row(ui, player);
     if player.prefs().check_updates_on_startup {
         beta_update_check_row(ui, player);
@@ -384,8 +393,14 @@ fn update_action_row(
     player: &Player,
     update_check: &mut crate::updater::UpdateChecker,
 ) {
+    // 当前版本(左)与检查更新按钮(右)共用一行, 避免版本号独占一行浪费纵向空间。
     ui.horizontal(|ui| {
         ui.set_min_height(SETTINGS_ROW_HEIGHT);
+        ui.label(format!(
+            "{} {}",
+            t!("current_version"),
+            update_check.current_version()
+        ));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             update_header_actions(ui, player, update_check);
         });
@@ -402,7 +417,8 @@ fn update_header_actions(
     if ui
         .add_enabled(
             !update_check.is_checking(),
-            egui::Button::new("↻").min_size(egui::vec2(SETTINGS_ROW_HEIGHT, SETTINGS_ROW_HEIGHT)),
+            egui::Button::new(crate::symbols::REFRESH)
+                .min_size(egui::vec2(SETTINGS_ROW_HEIGHT, SETTINGS_ROW_HEIGHT)),
         )
         .on_hover_text(t!("check_now").to_string())
         .clicked()
@@ -412,12 +428,6 @@ fn update_header_actions(
     if update_check.is_checking() {
         ui.add(egui::Spinner::new());
     }
-}
-
-fn current_version_row(ui: &mut egui::Ui, current_version: &str) {
-    settings_row(ui, t!("current_version").to_string(), |ui| {
-        ui.label(current_version);
-    });
 }
 
 fn startup_update_check_row(ui: &mut egui::Ui, player: &mut Player) {
@@ -582,7 +592,7 @@ mod tests {
         let source = source_before_tests();
 
         assert!(source.contains("UpdateChecker"));
-        assert!(source.contains("Button::new(\"↻\")"));
+        assert!(source.contains("Button::new(crate::symbols::REFRESH)"));
         assert!(source.contains("on_hover_text(t!(\"check_now\").to_string())"));
         assert!(source.contains("update_check.begin(player.prefs().check_beta_updates)"));
         assert!(source.contains("update_status(ui, update_check.status())"));
@@ -606,7 +616,7 @@ mod tests {
     fn screenshot_directory_button_uses_icon_only_with_hover_text() {
         let source = source_before_tests();
 
-        assert!(source.contains("egui::Button::new(\"📁\")"));
+        assert!(source.contains("egui::Button::new(crate::symbols::FOLDER)"));
         assert!(source.contains("[SETTINGS_ROW_HEIGHT, SETTINGS_ROW_HEIGHT]"));
         assert!(source.contains("on_hover_text(t!(\"choose_folder\").to_string())"));
         assert!(!source.contains("ui.button(t!(\"choose_folder\").to_string())"));

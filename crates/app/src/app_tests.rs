@@ -102,7 +102,8 @@ fn video_window_resize_tracks_current_video_once_and_waits_out_fullscreen() {
     let mut resize = ResizeHarness::default();
 
     let first = resize.request("/wide.mp4", (1920, 1080), false).unwrap();
-    assert!((first.x - 1066.6666).abs() < 0.01);
+    // 16:9: inner_width = (600 - 34) * 16/9, inner_height = 600
+    assert!((first.x - 1006.2222).abs() < 0.01);
     assert!((first.y - 600.0).abs() < 0.01);
     assert!(resize.last_is("/wide.mp4"));
 
@@ -112,8 +113,9 @@ fn video_window_resize_tracks_current_video_once_and_waits_out_fullscreen() {
     assert!(!resize.last_is("/squareish.mp4"));
 
     let second = resize.request("/squareish.mp4", (160, 120), false).unwrap();
+    // 4:3 clamped to APP_MIN_WIDTH: video_height = 920 * 3/4, inner_height = 690 + 34
     assert!((second.x - super::APP_MIN_WIDTH).abs() < 0.01);
-    assert!((second.y - 690.0).abs() < 0.01);
+    assert!((second.y - 724.0).abs() < 0.01);
 }
 
 #[test]

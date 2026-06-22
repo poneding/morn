@@ -120,6 +120,15 @@ struct BottomControlGroups<'a, 'commands> {
 
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, eframe_frame: &mut eframe::Frame) {
+        // macOS: 首帧把 contentView 的 layer 放置策略改为 topLeft, 掩盖 resize/最大化时
+        // 旧帧被拉伸的抖动(详见 macos::apply_resize_glitch_masking)。仅执行一次, 失败
+        // 则下一帧重试。
+        #[cfg(target_os = "macos")]
+        if !self.resize_glitch_mask_applied {
+            self.resize_glitch_mask_applied =
+                crate::macos::apply_resize_glitch_masking(eframe_frame);
+        }
+
         let ctx = ui.ctx().clone();
 
         self.sync_runtime_preferences(&ctx);
@@ -176,8 +185,15 @@ impl PlayerApp {
     }
 
     fn show_titlebar(&mut self, ctx: &egui::Context, state: &mut UiFrameState) {
-        let actions =
-            crate::titlebar::show_custom_titlebar(ctx, self.show_playlist, self.show_settings);
+        let title = self
+            .current_playlist_name()
+            .unwrap_or_else(|| String::new());
+        let actions = crate::titlebar::show_custom_titlebar(
+            ctx,
+            &title,
+            self.show_playlist,
+            self.show_settings,
+        );
         if actions.toggle_playlist {
             self.toggle_playlist_from_titlebar(state);
         }
@@ -300,6 +316,11 @@ impl PlayerApp {
                 );
             });
         });
+        crate::visuals::paint_panel_bevel(
+            ui,
+            frame.response.rect,
+            crate::visuals::PANEL_CORNER_RADIUS,
+        );
         frame.response.hovered() || frame.response.contains_pointer()
     }
 

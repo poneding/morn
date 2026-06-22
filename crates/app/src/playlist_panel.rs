@@ -29,22 +29,6 @@ const REMOVE_BUTTON_SIZE: f32 = 22.0;
 const REMOVE_ICON_STROKE_WIDTH: f32 = 1.35;
 const REMOVE_ICON_INSET_FACTOR: f32 = 0.19;
 const HEADER_ACTION_BUTTON_SIZE: f32 = crate::visuals::ICON_BUTTON_SIZE;
-const HEADER_ACTION_BG_SIZE: f32 = 26.0;
-const HEADER_ACTION_ICON_STROKE_WIDTH: f32 = 1.55;
-const HEADER_ACTION_PLUS_SIZE: f32 = 10.0;
-const HEADER_ACTION_TRASH_BODY_WIDTH: f32 = 8.0;
-const HEADER_ACTION_TRASH_BODY_HEIGHT: f32 = 8.5;
-const HEADER_ACTION_TRASH_BODY_Y_OFFSET: f32 = 1.5;
-const HEADER_ACTION_TRASH_LID_WIDTH: f32 = 12.0;
-const HEADER_ACTION_TRASH_LID_Y_OFFSET: f32 = 4.5;
-const HEADER_ACTION_TRASH_HANDLE_WIDTH: f32 = 4.0;
-const HEADER_ACTION_TRASH_HANDLE_Y_OFFSET: f32 = 7.5;
-
-#[derive(Clone, Copy)]
-enum HeaderActionIcon {
-    AddFile,
-    ClearList,
-}
 
 fn header_icon_button_size(_ui: &egui::Ui) -> egui::Vec2 {
     egui::Vec2::splat(HEADER_ACTION_BUTTON_SIZE)
@@ -53,97 +37,24 @@ fn header_icon_button_size(_ui: &egui::Ui) -> egui::Vec2 {
 fn header_action_button_at(
     ui: &mut egui::Ui,
     rect: egui::Rect,
-    icon: HeaderActionIcon,
+    icon: &'static str,
 ) -> egui::Response {
     // Header actions are positioned by the sidebar header, so this draws a button
     // directly into the caller-provided rectangle instead of asking layout to
     // allocate another cell.
     let response = ui.allocate_rect(rect, egui::Sense::click());
     if ui.is_rect_visible(rect) {
-        paint_header_action_button(ui, rect, icon, &response);
-    }
-    response
-}
-
-fn paint_header_action_button(
-    ui: &egui::Ui,
-    rect: egui::Rect,
-    icon: HeaderActionIcon,
-    response: &egui::Response,
-) {
-    let visuals = ui.style().interact(response);
-    let bg_rect = egui::Rect::from_center_size(
-        rect.center(),
-        egui::Vec2::splat(HEADER_ACTION_BG_SIZE.min(rect.width().min(rect.height()))),
-    );
-    if response.hovered() || response.is_pointer_button_down_on() {
-        let radius = (bg_rect.width() * 0.5).round() as u8;
-        ui.painter().rect_filled(
-            bg_rect,
-            egui::CornerRadius::same(radius),
-            visuals.weak_bg_fill,
+        crate::visuals::beveled_button_frame_at(ui, rect, &response, false, 1.0);
+        let visuals = ui.style().interact(&response);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            egui::FontId::proportional(13.5),
+            visuals.fg_stroke.color,
         );
     }
-    let stroke = egui::Stroke::new(HEADER_ACTION_ICON_STROKE_WIDTH, visuals.fg_stroke.color);
-    match icon {
-        HeaderActionIcon::AddFile => paint_header_add_icon(ui, rect.center(), stroke),
-        HeaderActionIcon::ClearList => paint_header_trash_icon(ui, rect.center(), stroke),
-    }
-}
-
-fn paint_header_add_icon(ui: &egui::Ui, center: egui::Pos2, stroke: egui::Stroke) {
-    let center = egui::pos2(center.x.round(), center.y.round());
-    let half = HEADER_ACTION_PLUS_SIZE * 0.5;
-    ui.painter().line_segment(
-        [
-            egui::pos2(center.x - half, center.y),
-            egui::pos2(center.x + half, center.y),
-        ],
-        stroke,
-    );
-    ui.painter().line_segment(
-        [
-            egui::pos2(center.x, center.y - half),
-            egui::pos2(center.x, center.y + half),
-        ],
-        stroke,
-    );
-}
-
-fn paint_header_trash_icon(ui: &egui::Ui, center: egui::Pos2, stroke: egui::Stroke) {
-    let body = egui::Rect::from_center_size(
-        egui::pos2(
-            center.x.round(),
-            (center.y + HEADER_ACTION_TRASH_BODY_Y_OFFSET).round(),
-        ),
-        egui::vec2(
-            HEADER_ACTION_TRASH_BODY_WIDTH,
-            HEADER_ACTION_TRASH_BODY_HEIGHT,
-        ),
-    );
-    let lid_y = (center.y - HEADER_ACTION_TRASH_LID_Y_OFFSET).round();
-    let handle_y = (center.y - HEADER_ACTION_TRASH_HANDLE_Y_OFFSET).round();
-
-    ui.painter().line_segment(
-        [
-            egui::pos2(center.x - HEADER_ACTION_TRASH_LID_WIDTH * 0.5, lid_y),
-            egui::pos2(center.x + HEADER_ACTION_TRASH_LID_WIDTH * 0.5, lid_y),
-        ],
-        stroke,
-    );
-    ui.painter()
-        .line_segment([body.left_top(), body.left_bottom()], stroke);
-    ui.painter()
-        .line_segment([body.right_top(), body.right_bottom()], stroke);
-    ui.painter()
-        .line_segment([body.left_bottom(), body.right_bottom()], stroke);
-    ui.painter().line_segment(
-        [
-            egui::pos2(center.x - HEADER_ACTION_TRASH_HANDLE_WIDTH * 0.5, handle_y),
-            egui::pos2(center.x + HEADER_ACTION_TRASH_HANDLE_WIDTH * 0.5, handle_y),
-        ],
-        stroke,
-    );
+    response
 }
 
 pub fn open_file_button_size(ui: &egui::Ui) -> egui::Vec2 {
@@ -156,7 +67,7 @@ pub fn clear_all_button_size(ui: &egui::Ui) -> egui::Vec2 {
 
 pub fn open_file_button_at(ui: &mut egui::Ui, rect: egui::Rect) -> Vec<Command> {
     let mut cmds = Vec::new();
-    let response = header_action_button_at(ui, rect, HeaderActionIcon::AddFile);
+    let response = header_action_button_at(ui, rect, "+");
     let button_response = response.on_hover_text(crate::shortcuts::shortcut_tooltip(
         t!("open_file"),
         crate::shortcuts::open_shortcut_label(),
@@ -175,10 +86,10 @@ pub fn clear_all_button_at(
 ) -> Vec<Command> {
     let mut cmds = Vec::new();
     let response = if enabled {
-        header_action_button_at(ui, rect, HeaderActionIcon::ClearList)
+        header_action_button_at(ui, rect, "⌫")
     } else {
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect).disabled(), |ui| {
-            header_action_button_at(ui, rect, HeaderActionIcon::ClearList)
+            header_action_button_at(ui, rect, "⌫")
         })
         .inner
     }
@@ -594,13 +505,12 @@ mod tests {
         assert!(!source.contains("OPEN_MENU"));
         assert!(!source.contains("MenuButton"));
         assert!(!source.contains("OpenFolder"));
-        assert!(source.contains("HeaderActionIcon::AddFile"));
-        assert!(source.contains("paint_header_add_icon"));
+        assert!(source.contains("header_action_button_at(ui, rect, \"+\")"));
         assert!(source.contains("Command::OpenDialog"));
     }
 
     #[test]
-    fn header_action_buttons_use_clean_ghost_icons() {
+    fn header_action_buttons_use_shared_symbol_buttons() {
         let source = source_before_tests();
 
         assert!(source.contains("fn header_icon_button_size"));
@@ -608,12 +518,12 @@ mod tests {
         assert!(source.contains("egui::Vec2::splat(HEADER_ACTION_BUTTON_SIZE)"));
         assert!(source.contains("open_file_button_size"));
         assert!(source.contains("clear_all_button_size"));
-        assert!(source.contains("enum HeaderActionIcon"));
-        assert!(source.contains("const HEADER_ACTION_BG_SIZE: f32 = 26.0"));
-        assert!(source.contains("const HEADER_ACTION_ICON_STROKE_WIDTH: f32 = 1.55"));
-        assert!(source.contains("paint_header_add_icon"));
-        assert!(source.contains("paint_header_trash_icon"));
-        assert!(source.contains("response.hovered() || response.is_pointer_button_down_on()"));
+        assert!(source.contains("beveled_button_frame_at"));
+        assert!(source.contains("header_action_button_at(ui, rect, \"+\")"));
+        assert!(source.contains("header_action_button_at(ui, rect, \"⌫\")"));
+        assert!(!source.contains("enum HeaderActionIcon"));
+        assert!(!source.contains("paint_header_add_icon"));
+        assert!(!source.contains("paint_header_trash_icon"));
         assert!(!source.contains("paint_header_clear_list_icon"));
         assert!(!source.contains("fn adaptive_icon_button"));
         assert!(!source.contains("fn icon_button_size"));
@@ -814,7 +724,7 @@ mod tests {
     fn open_entry_only_exposes_file_dialog() {
         let source = source_before_tests();
 
-        assert!(source.contains("HeaderActionIcon::AddFile"));
+        assert!(source.contains("header_action_button_at(ui, rect, \"+\")"));
         assert!(source.contains("Command::OpenDialog"));
         assert!(source.contains("shortcut_tooltip"));
         assert!(source.contains("t!(\"open_file\")"));

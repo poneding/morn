@@ -28,6 +28,7 @@ mod playlist_panel;
 mod settings;
 mod shortcuts;
 mod subtitle_overlay;
+mod symbols;
 mod theme;
 mod titlebar;
 mod updater;
@@ -170,12 +171,15 @@ mod tests {
         assert_eq!(super::app::window_size_for_video_dimensions(160, 0), None);
 
         let wide = super::app::window_size_for_video_dimensions(1920, 1080).unwrap();
-        assert!(close_enough(wide.x, 1066.6666));
+        // 16:9 video: inner_width = (600 - 34) * 16/9, inner_height = 600
+        assert!(close_enough(wide.x, 1006.2222));
         assert!(close_enough(wide.y, 600.0));
 
         let squareish = super::app::window_size_for_video_dimensions(160, 120).unwrap();
+        // 4:3 video clamped to APP_MIN_WIDTH: video_height = 920 * 3/4 = 690,
+        // inner_height = 690 + 34 (titlebar offset)
         assert!(close_enough(squareish.x, super::APP_MIN_WIDTH));
-        assert!(close_enough(squareish.y, 690.0));
+        assert!(close_enough(squareish.y, 724.0));
     }
 
     #[test]

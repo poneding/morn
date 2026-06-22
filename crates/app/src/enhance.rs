@@ -33,8 +33,12 @@ pub fn enhance_bar(ui: &mut egui::Ui, rate_pct: u16) -> EnhanceActions {
         .add_sized(
             [RATE_BUTTON_WIDTH, crate::controls::CONTROL_BUTTON_SIZE],
             egui::Button::new(
-                egui::RichText::new(format!("{:.2}x ▼", rate_pct as f32 / 100.0))
-                    .family(egui::FontFamily::Monospace),
+                egui::RichText::new(format!(
+                    "{:.2}x {}",
+                    rate_pct as f32 / 100.0,
+                    crate::symbols::RATE_DROPDOWN
+                ))
+                .family(egui::FontFamily::Monospace),
             ),
         )
         .on_hover_text(crate::shortcuts::shortcut_tooltip(
@@ -55,7 +59,7 @@ fn screenshot_button_clicked(ui: &mut egui::Ui) -> bool {
             crate::controls::CONTROL_BUTTON_SIZE,
             crate::controls::CONTROL_BUTTON_SIZE,
         ],
-        egui::Button::new("📷"),
+        egui::Button::new(crate::symbols::SCREENSHOT),
     )
     .on_hover_text(crate::shortcuts::shortcut_tooltip(t!("screenshot"), "S"))
     .clicked()

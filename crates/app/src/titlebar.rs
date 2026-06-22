@@ -32,12 +32,6 @@ pub struct TitlebarActions {
     pub toggle_settings: bool,
 }
 
-pub fn titlebar_visible(pointer_pos: Option<egui::Pos2>, screen_rect: egui::Rect) -> bool {
-    // Visibility is pointer-driven rather than focus-driven so keyboard playback
-    // shortcuts do not accidentally reveal chrome, and it auto-hides on leave.
-    pointer_pos.is_some_and(|pos| screen_rect.contains(pos))
-}
-
 pub fn window_corner_radius() -> f32 {
     WINDOW_CORNER_RADIUS as f32
 }
@@ -144,6 +138,7 @@ fn resize_handles(
 
 pub fn show_custom_titlebar(
     ctx: &egui::Context,
+    title: &str,
     show_playlist: bool,
     show_settings: bool,
 ) -> TitlebarActions {
@@ -185,7 +180,7 @@ pub fn show_custom_titlebar(
                 .multiply_with_opacity(opacity)
                 .show(ui, |ui| {
                     ui.set_height(TITLEBAR_HEIGHT);
-                    titlebar_contents(ui, show_playlist, show_settings, opacity, &mut actions);
+                    titlebar_contents(ui, title, show_playlist, show_settings, opacity, &mut actions);
                 });
         });
 
@@ -206,7 +201,7 @@ fn titlebar_opacity(ctx: &egui::Context, screen_rect: egui::Rect) -> f32 {
     #[cfg(not(target_os = "macos"))]
     {
         let pointer_pos = ctx.input(|i| i.pointer.hover_pos());
-        let visible = titlebar_visible(pointer_pos, screen_rect);
+        let visible = pointer_pos.is_some_and(|pos| screen_rect.contains(pos));
         ctx.animate_bool_with_time(
             egui::Id::new("custom_titlebar_opacity"),
             visible,
@@ -221,6 +216,7 @@ fn titlebar_fill(ui: &egui::Ui) -> egui::Color32 {
 
 fn titlebar_contents(
     ui: &mut egui::Ui,
+    title: &str,
     show_playlist: bool,
     show_settings: bool,
     opacity: f32,
@@ -242,7 +238,7 @@ fn titlebar_contents(
         // App actions live on the right; the rest of the strip is the drag region.
         let buttons_width = titlebar_app_buttons_width(ui);
         let drag_width = (ui.available_width() - buttons_width).max(0.0);
-        drag_region(ui, drag_width, opacity);
+        drag_region(ui, title, drag_width, opacity);
         titlebar_app_buttons(ui, show_playlist, show_settings, opacity, actions);
     });
 }
@@ -265,22 +261,20 @@ fn titlebar_app_buttons(
     opacity: f32,
     actions: &mut TitlebarActions,
 ) {
-    let playlist = titlebar_icon_button(ui, "☰", show_playlist, opacity).on_hover_text(
-        crate::shortcuts::shortcut_tooltip(
+    let playlist = titlebar_icon_button(ui, crate::symbols::PLAYLIST, show_playlist, opacity)
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(
             t!("playlist"),
             crate::shortcuts::playlist_shortcut_label(),
-        ),
-    );
+        ));
     if playlist.clicked() {
         actions.toggle_playlist = true;
     }
 
-    let settings = titlebar_icon_button(ui, "⚙", show_settings, opacity).on_hover_text(
-        crate::shortcuts::shortcut_tooltip(
+    let settings = titlebar_icon_button(ui, crate::symbols::SETTINGS, show_settings, opacity)
+        .on_hover_text(crate::shortcuts::shortcut_tooltip(
             t!("settings"),
             crate::shortcuts::settings_shortcut_label(),
-        ),
-    );
+        ));
     if settings.clicked() {
         actions.toggle_settings = true;
     }
@@ -303,26 +297,8 @@ fn titlebar_icon_button(
     } else {
         ui.visuals().text_color().gamma_multiply(opacity)
     };
-    let bg_fill = if selected {
-        Some(ui.visuals().selection.bg_fill.gamma_multiply(opacity))
-    } else if response.hovered() {
-        Some(
-            ui.visuals()
-                .widgets
-                .hovered
-                .weak_bg_fill
-                .gamma_multiply(opacity),
-        )
-    } else {
-        None
-    };
-
-    if let Some(fill) = bg_fill {
-        ui.painter().rect_filled(
-            rect.shrink(1.0),
-            egui::CornerRadius::same(crate::visuals::CONTROL_CORNER_RADIUS),
-            fill,
-        );
+    if selected || response.hovered() || response.is_pointer_button_down_on() {
+        crate::visuals::beveled_button_frame_at(ui, rect, &response, selected, opacity);
     }
     ui.painter().text(
         rect.center(),
@@ -334,17 +310,18 @@ fn titlebar_icon_button(
     response
 }
 
-fn drag_region(ui: &mut egui::Ui, width: f32, opacity: f32) {
+fn drag_region(ui: &mut egui::Ui, title: &str, width: f32, opacity: f32) {
     // Native titlebar drag stops working once content extends under it, so the
     // strip itself starts a window drag; double-click mirrors the native zoom.
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(width, TITLEBAR_HEIGHT),
         egui::Sense::click_and_drag(),
     );
+    let displayed_title = if title.is_empty() { "Morn" } else { title };
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        "Morn",
+        displayed_title,
         egui::FontId::proportional(12.0),
         ui.visuals()
             .widgets
@@ -362,21 +339,6 @@ fn drag_region(ui: &mut egui::Ui, width: f32, opacity: f32) {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn titlebar_is_visible_only_while_pointer_is_inside_window() {
-        let screen = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
-
-        assert!(super::titlebar_visible(
-            Some(egui::pos2(20.0, 20.0)),
-            screen
-        ));
-        assert!(!super::titlebar_visible(
-            Some(egui::pos2(20.0, -1.0)),
-            screen
-        ));
-        assert!(!super::titlebar_visible(None, screen));
-    }
-
     #[test]
     fn titlebar_supports_window_drag_buttons_and_resize_handles() {
         let source = include_str!("titlebar.rs")
@@ -403,10 +365,10 @@ mod tests {
         assert!(source.contains("toggle_playlist"));
         assert!(source.contains("toggle_settings"));
         assert!(source.contains("titlebar_app_buttons"));
-        assert!(source.contains("titlebar_icon_button(ui, \"☰\""));
-        assert!(source.contains("titlebar_icon_button(ui, \"⚙\""));
-        assert!(source.contains("titlebar_icon_button(ui, \"⚙\", show_settings"));
-        assert!(source.contains("ui.visuals().selection.bg_fill"));
+        assert!(source.contains("crate::symbols::PLAYLIST"));
+        assert!(source.contains("crate::symbols::SETTINGS"));
+        assert!(source.contains("titlebar_icon_button(ui, crate::symbols::SETTINGS, show_settings"));
+        assert!(source.contains("beveled_button_frame_at"));
         assert!(source.contains("ui.visuals().selection.stroke.color"));
         assert!(source.contains(
             "TITLEBAR_TRAILING_MARGIN: f32 = crate::visuals::FLOATING_PANEL_INNER_MARGIN_X as f32"

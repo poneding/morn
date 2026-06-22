@@ -42,8 +42,12 @@ const OVERLAY_HOVER_RECHECK_GRACE: std::time::Duration = std::time::Duration::fr
 const WINDOW_RESIZE_REPAINT_GRACE: std::time::Duration = std::time::Duration::from_millis(150);
 const PLAYLIST_SHEET_INNER_MARGIN_X: i8 = crate::visuals::FLOATING_PANEL_INNER_MARGIN_X;
 const PLAYLIST_SHEET_INNER_MARGIN_Y: i8 = crate::visuals::FLOATING_CONTROL_BAR_INNER_MARGIN_Y;
-const SCREENSHOT_NOTICE_TOP_OFFSET: f32 = 14.0;
-const SHORTCUT_NOTICE_TOP_OFFSET: f32 = 14.0;
+// 提示标语锚定在标题栏下方, 不遮挡标题栏(macOS 红绿灯/自绘标题)。
+// 复用标题栏底部偏移 + 一个间距, 与播放列表顶部避开标题栏的逻辑一致。
+const SCREENSHOT_NOTICE_TOP_OFFSET: f32 =
+    crate::titlebar::TITLEBAR_BOTTOM_OFFSET + crate::visuals::FLOATING_PANEL_MARGIN;
+const SHORTCUT_NOTICE_TOP_OFFSET: f32 =
+    crate::titlebar::TITLEBAR_BOTTOM_OFFSET + crate::visuals::FLOATING_PANEL_MARGIN;
 const SHORTCUT_NOTICE_DURATION: std::time::Duration = std::time::Duration::from_millis(1400);
 const ARROW_LONG_PRESS_RATE_PCT: u16 = 200;
 const ARROW_LONG_PRESS_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(450);
@@ -61,17 +65,22 @@ fn window_size_for_video_aspect(aspect: f32) -> egui::Vec2 {
         return DEFAULT_INITIAL_INNER_SIZE.into();
     }
 
-    let mut width = DEFAULT_INITIAL_INNER_SIZE[1] * aspect;
-    let mut height = DEFAULT_INITIAL_INNER_SIZE[1];
-    if width < APP_MIN_WIDTH {
-        width = APP_MIN_WIDTH;
-        height = width / aspect;
+    // The inner window height includes the titlebar area; the video renders
+    // below it, so derive dimensions such that the video area maintains the
+    // correct aspect ratio.
+    let tb_offset = crate::titlebar::TITLEBAR_BOTTOM_OFFSET;
+    let mut inner_width = (DEFAULT_INITIAL_INNER_SIZE[1] - tb_offset) * aspect;
+    let mut inner_height = DEFAULT_INITIAL_INNER_SIZE[1];
+
+    if inner_width < APP_MIN_WIDTH {
+        inner_width = APP_MIN_WIDTH;
+        inner_height = inner_width / aspect + tb_offset;
     }
-    if height < APP_MIN_HEIGHT {
-        height = APP_MIN_HEIGHT;
-        width = height * aspect;
+    if inner_height < APP_MIN_HEIGHT {
+        inner_height = APP_MIN_HEIGHT;
+        inner_width = (inner_height - tb_offset) * aspect;
     }
-    egui::vec2(width, height)
+    egui::vec2(inner_width, inner_height)
 }
 
 struct TimedNotice {
@@ -218,6 +227,9 @@ pub struct PlayerApp {
     update_check: crate::updater::UpdateChecker,
     last_window_resized_video_path: Option<std::path::PathBuf>,
     arrow_hold_playback: ArrowHoldPlayback,
+    /// macOS: 标记是否已在首帧应用 resize 旧帧拉伸的掩盖(layerContentsPlacement)。
+    #[cfg(target_os = "macos")]
+    resize_glitch_mask_applied: bool,
 }
 
 #[path = "app_behavior.rs"]
@@ -308,6 +320,8 @@ impl PlayerApp {
             update_check,
             last_window_resized_video_path: None,
             arrow_hold_playback: ArrowHoldPlayback::default(),
+            #[cfg(target_os = "macos")]
+            resize_glitch_mask_applied: false,
         }
     }
 
@@ -447,8 +461,12 @@ impl PlayerApp {
 
     fn show_video_panel(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let mut video_commands = Vec::new();
+        let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
         egui::CentralPanel::no_frame().show_inside(ui, |ui| {
             ui.set_min_width(VIDEO_MIN_WIDTH);
+            if !fullscreen {
+                ui.add_space(crate::titlebar::TITLEBAR_BOTTOM_OFFSET);
+            }
             video_commands = self.video_view.show(ui, frame, &mut self.player);
         });
         for cmd in video_commands {

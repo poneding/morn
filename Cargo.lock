@@ -230,6 +230,7 @@ dependencies = [
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
  "player-core",
+ "raw-window-handle",
  "render",
  "rfd",
  "rust-i18n",
