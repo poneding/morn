@@ -67,6 +67,105 @@ cat > "${contents}/Info.plist" <<EOF
   <string>11.0</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.video</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>MPEG-4 Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.mpeg-4</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Matroska Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>org.matroska.mkv</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>QuickTime Movie</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.apple.quicktime-movie</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>AVI Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.avi</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Windows Media Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.microsoft.windows-media-wmv</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Flash Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.adobe.flash-video</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>WebM Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>org.webmproject.webm</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>MPEG Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.mpeg</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>MPEG-2 Transport Stream</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.mpeg-2-transport-stream</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>3GPP Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.3gpp</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Ogg Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>org.xiph.ogv-video</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>RealMedia Video</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.real.realmedia</string></array>
+    </dict>
+  </array>
 </dict>
 </plist>
 EOF
