@@ -53,6 +53,108 @@ resources = ["$($runtime.Replace('\', '/'))/*.dll"]
 [[binaries]]
 path = "morn"
 main = true
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".mp4"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".mkv"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".avi"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".mov"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".wmv"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".flv"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".webm"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".m4v"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".mpg"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".mpeg"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".ts"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".mts"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".m2ts"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".3gp"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".ogv"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".rm"
+value = ""
+
+[[registry]]
+hkcu = false
+key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
+name = ".rmvb"
+value = ""
 "@
 $configPath = Join-Path (Get-Location) "Packager-$Suffix.toml"
 New-Item -ItemType Directory -Force -Path "dist" | Out-Null
