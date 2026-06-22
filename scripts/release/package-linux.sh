@@ -48,6 +48,7 @@ Exec=morn
 Icon=morn
 Terminal=false
 Categories=AudioVideo;Player;Video;
+MimeType=video/mp4;video/x-matroska;video/quicktime;video/x-msvideo;video/x-ms-wmv;video/x-flv;video/webm;video/mpeg;video/mp2t;video/3gpp;video/ogg;video/vnd.rn-realvideo;video/x-m4v;
 EOF
 
 install -m 0755 "${binary}" "${pkgroot}/usr/bin/morn"
