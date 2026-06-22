@@ -40,10 +40,32 @@ rust_i18n::i18n!("locales", fallback = "en");
 use app::{PlayerApp, APP_MIN_HEIGHT, APP_MIN_WIDTH};
 use std::path::{Path, PathBuf};
 
+const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ts", "mts", "m2ts",
+    "3gp", "ogv", "rm", "rmvb",
+];
+
+fn collect_cli_video_paths() -> Vec<PathBuf> {
+    std::env::args_os()
+        .skip(1)
+        .filter_map(|arg| {
+            let path = std::path::PathBuf::from(arg);
+            if !path.is_file() {
+                return None;
+            }
+            let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+            VIDEO_EXTENSIONS
+                .contains(&ext.as_str())
+                .then(|| path.canonicalize().unwrap_or(path))
+        })
+        .collect()
+}
+
 fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     macos::install_about_metadata(env!("CARGO_PKG_VERSION"));
 
+    let initial_paths = collect_cli_video_paths();
     let initial_inner_size = startup_window_size();
     let native_options = eframe::NativeOptions {
         viewport: app_viewport(initial_inner_size).with_icon(app_icon()),
@@ -53,7 +75,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Morn",
         native_options,
-        Box::new(|cc| Ok(Box::new(PlayerApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(PlayerApp::new(cc, initial_paths)))),
     )
 }
 

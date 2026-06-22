@@ -25,6 +25,7 @@ use crate::video_view::VideoView;
 use eframe::egui;
 use engine::Player;
 use rust_i18n::t;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarTab {
@@ -293,14 +294,14 @@ fn show_notice_area(ctx: &egui::Context, id: &'static str, top_offset: f32, mess
 }
 
 impl PlayerApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, initial_paths: Vec<PathBuf>) -> Self {
         let player = restored_player();
         let font_locale = player.prefs().language.clone();
         rust_i18n::set_locale(&font_locale);
         crate::font::install_fonts(&cc.egui_ctx, &font_locale);
         crate::theme::install(&cc.egui_ctx);
         let update_check = startup_update_checker(&player);
-        Self {
+        let mut this = Self {
             player,
             video_view: VideoView::new(),
             show_settings: false,
@@ -322,7 +323,12 @@ impl PlayerApp {
             arrow_hold_playback: ArrowHoldPlayback::default(),
             #[cfg(target_os = "macos")]
             resize_glitch_mask_applied: false,
+        };
+        if !initial_paths.is_empty() {
+            this.player
+                .handle(player_core::Command::OpenFiles(initial_paths));
         }
+        this
     }
 
     fn show_screenshot_notice(&mut self, ctx: &egui::Context) {
