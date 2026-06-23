@@ -54,107 +54,65 @@ resources = ["$($runtime.Replace('\', '/'))/*.dll"]
 path = "morn"
 main = true
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".mp4"
-value = ""
+[[file-associations]]
+name = "MPEG-4 Video"
+description = "MPEG-4 Video"
+ext = ["mp4", "m4v"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".mkv"
-value = ""
+[[file-associations]]
+name = "Matroska Video"
+description = "Matroska Video"
+ext = ["mkv"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".avi"
-value = ""
+[[file-associations]]
+name = "AVI Video"
+description = "AVI Video"
+ext = ["avi"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".mov"
-value = ""
+[[file-associations]]
+name = "QuickTime Movie"
+description = "QuickTime Movie"
+ext = ["mov"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".wmv"
-value = ""
+[[file-associations]]
+name = "Windows Media Video"
+description = "Windows Media Video"
+ext = ["wmv"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".flv"
-value = ""
+[[file-associations]]
+name = "Flash Video"
+description = "Flash Video"
+ext = ["flv"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".webm"
-value = ""
+[[file-associations]]
+name = "WebM Video"
+description = "WebM Video"
+ext = ["webm"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".m4v"
-value = ""
+[[file-associations]]
+name = "MPEG Video"
+description = "MPEG Video"
+ext = ["mpg", "mpeg"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".mpg"
-value = ""
+[[file-associations]]
+name = "MPEG-2 Transport Stream"
+description = "MPEG-2 Transport Stream"
+ext = ["ts", "mts", "m2ts"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".mpeg"
-value = ""
+[[file-associations]]
+name = "3GPP Video"
+description = "3GPP Video"
+ext = ["3gp"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".ts"
-value = ""
+[[file-associations]]
+name = "Ogg Video"
+description = "Ogg Video"
+ext = ["ogv"]
 
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".mts"
-value = ""
-
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".m2ts"
-value = ""
-
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".3gp"
-value = ""
-
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".ogv"
-value = ""
-
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".rm"
-value = ""
-
-[[registry]]
-hkcu = false
-key = "Software\\Classes\\Applications\\morn.exe\\SupportedTypes"
-name = ".rmvb"
-value = ""
+[[file-associations]]
+name = "RealMedia Video"
+description = "RealMedia Video"
+ext = ["rm", "rmvb"]
 "@
 $configPath = Join-Path (Get-Location) "Packager-$Suffix.toml"
 New-Item -ItemType Directory -Force -Path "dist" | Out-Null
