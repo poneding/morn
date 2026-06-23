@@ -57,62 +57,62 @@ main = true
 [[file-associations]]
 name = "MPEG-4 Video"
 description = "MPEG-4 Video"
-ext = ["mp4", "m4v"]
+extensions = ["mp4", "m4v"]
 
 [[file-associations]]
 name = "Matroska Video"
 description = "Matroska Video"
-ext = ["mkv"]
+extensions = ["mkv"]
 
 [[file-associations]]
 name = "AVI Video"
 description = "AVI Video"
-ext = ["avi"]
+extensions = ["avi"]
 
 [[file-associations]]
 name = "QuickTime Movie"
 description = "QuickTime Movie"
-ext = ["mov"]
+extensions = ["mov"]
 
 [[file-associations]]
 name = "Windows Media Video"
 description = "Windows Media Video"
-ext = ["wmv"]
+extensions = ["wmv"]
 
 [[file-associations]]
 name = "Flash Video"
 description = "Flash Video"
-ext = ["flv"]
+extensions = ["flv"]
 
 [[file-associations]]
 name = "WebM Video"
 description = "WebM Video"
-ext = ["webm"]
+extensions = ["webm"]
 
 [[file-associations]]
 name = "MPEG Video"
 description = "MPEG Video"
-ext = ["mpg", "mpeg"]
+extensions = ["mpg", "mpeg"]
 
 [[file-associations]]
 name = "MPEG-2 Transport Stream"
 description = "MPEG-2 Transport Stream"
-ext = ["ts", "mts", "m2ts"]
+extensions = ["ts", "mts", "m2ts"]
 
 [[file-associations]]
 name = "3GPP Video"
 description = "3GPP Video"
-ext = ["3gp"]
+extensions = ["3gp"]
 
 [[file-associations]]
 name = "Ogg Video"
 description = "Ogg Video"
-ext = ["ogv"]
+extensions = ["ogv"]
 
 [[file-associations]]
 name = "RealMedia Video"
 description = "RealMedia Video"
-ext = ["rm", "rmvb"]
+extensions = ["rm", "rmvb"]
 "@
 $configPath = Join-Path (Get-Location) "Packager-$Suffix.toml"
 New-Item -ItemType Directory -Force -Path "dist" | Out-Null
