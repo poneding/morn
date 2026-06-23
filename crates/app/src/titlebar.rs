@@ -180,7 +180,14 @@ pub fn show_custom_titlebar(
                 .multiply_with_opacity(opacity)
                 .show(ui, |ui| {
                     ui.set_height(TITLEBAR_HEIGHT);
-                    titlebar_contents(ui, title, show_playlist, show_settings, opacity, &mut actions);
+                    titlebar_contents(
+                        ui,
+                        title,
+                        show_playlist,
+                        show_settings,
+                        opacity,
+                        &mut actions,
+                    );
                 });
         });
 
