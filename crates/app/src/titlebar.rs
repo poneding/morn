@@ -8,15 +8,15 @@
 use eframe::egui;
 use rust_i18n::t;
 
-const TITLEBAR_HEIGHT: f32 = 28.0;
+const TITLEBAR_HEIGHT: f32 = 26.0;
 const TITLEBAR_BUTTON_SIZE: f32 = crate::visuals::ICON_BUTTON_SIZE;
 const TITLEBAR_INNER_MARGIN_X: i8 = 8;
-const TITLEBAR_INNER_MARGIN_Y: i8 = 3;
+const TITLEBAR_INNER_MARGIN_Y: i8 = 1;
 #[cfg(not(target_os = "macos"))]
 const TITLEBAR_FADE_TIME: f32 = 0.12;
 #[cfg(target_os = "macos")]
 const NATIVE_TRAFFIC_LIGHT_SPACER_WIDTH: f32 = 72.0;
-const TITLEBAR_TRAILING_MARGIN: f32 = crate::visuals::FLOATING_PANEL_INNER_MARGIN_X as f32;
+const TITLEBAR_TRAILING_MARGIN: f32 = 4.0;
 /// 标题栏这个 UI 元素的底部位置。浮层与顶部 Title 的视觉间距应从这里开始算,
 /// 而不是从窗口顶部边框开始算。
 pub const TITLEBAR_BOTTOM_OFFSET: f32 = TITLEBAR_HEIGHT + (TITLEBAR_INNER_MARGIN_Y as f32) * 2.0;
@@ -373,9 +373,8 @@ mod tests {
         assert!(source.contains("titlebar_icon_button(ui, crate::symbols::SETTINGS, show_settings"));
         assert!(source.contains("beveled_button_frame_at"));
         assert!(source.contains("ui.visuals().selection.stroke.color"));
-        assert!(source.contains(
-            "TITLEBAR_TRAILING_MARGIN: f32 = crate::visuals::FLOATING_PANEL_INNER_MARGIN_X as f32"
-        ));
+        assert_eq!(super::TITLEBAR_TRAILING_MARGIN, 4.0);
+        assert_eq!(super::TITLEBAR_BOTTOM_OFFSET, 28.0);
         assert!(source.contains("ui.spacing().item_spacing.x * 2.0"));
         // Both action buttons share one fixed square size.
         assert!(source.contains("egui::vec2(TITLEBAR_BUTTON_SIZE, TITLEBAR_BUTTON_SIZE)"));

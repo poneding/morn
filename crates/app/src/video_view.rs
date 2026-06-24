@@ -53,16 +53,90 @@ fn empty_state(ui: &mut egui::Ui) -> Vec<Command> {
     commands
 }
 
-fn fit_rect(container: egui::Rect, content: egui::Vec2) -> egui::Rect {
+fn fit_rect_to_pixels(
+    container: egui::Rect,
+    content: egui::Vec2,
+    pixels_per_point: f32,
+) -> egui::Rect {
     // Degenerate frames still allocate a zero-sized rect at center so callers can
     // keep subtitle/layout math simple.
     if content.x <= 0.0 || content.y <= 0.0 || container.is_negative() {
         return egui::Rect::from_center_size(container.center(), egui::Vec2::ZERO);
     }
-    let scale = (container.width() / content.x)
-        .min(container.height() / content.y)
-        .max(0.0);
-    egui::Rect::from_center_size(container.center(), content * scale)
+    let pixels_per_point = if pixels_per_point.is_finite() && pixels_per_point > 0.0 {
+        pixels_per_point
+    } else {
+        1.0
+    };
+
+    let container_px = rect_to_pixels(container, pixels_per_point);
+    if container_px.width() <= 0.0 || container_px.height() <= 0.0 {
+        return egui::Rect::from_center_size(container.center(), egui::Vec2::ZERO);
+    }
+
+    let aspect = content.x / content.y;
+    if !aspect.is_finite() || aspect <= 0.0 {
+        return egui::Rect::from_center_size(container.center(), egui::Vec2::ZERO);
+    }
+
+    let container_aspect = container_px.width() / container_px.height();
+    let size_px = if container_aspect > aspect {
+        egui::vec2(
+            (container_px.height() * aspect)
+                .round()
+                .min(container_px.width()),
+            container_px.height(),
+        )
+    } else {
+        egui::vec2(
+            container_px.width(),
+            (container_px.width() / aspect)
+                .round()
+                .min(container_px.height()),
+        )
+    };
+    let min_px = egui::pos2(
+        (container_px.center().x - size_px.x * 0.5).round(),
+        (container_px.center().y - size_px.y * 0.5).round(),
+    );
+    let fitted_px = keep_rect_inside(egui::Rect::from_min_size(min_px, size_px), container_px);
+    rect_from_pixels(fitted_px, pixels_per_point)
+}
+
+fn rect_to_pixels(rect: egui::Rect, pixels_per_point: f32) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(
+            (rect.min.x * pixels_per_point).round(),
+            (rect.min.y * pixels_per_point).round(),
+        ),
+        egui::pos2(
+            (rect.max.x * pixels_per_point).round(),
+            (rect.max.y * pixels_per_point).round(),
+        ),
+    )
+}
+
+fn rect_from_pixels(rect: egui::Rect, pixels_per_point: f32) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(rect.min.x / pixels_per_point, rect.min.y / pixels_per_point),
+        egui::pos2(rect.max.x / pixels_per_point, rect.max.y / pixels_per_point),
+    )
+}
+
+fn keep_rect_inside(mut rect: egui::Rect, bounds: egui::Rect) -> egui::Rect {
+    if rect.min.x < bounds.min.x {
+        rect = rect.translate(egui::vec2(bounds.min.x - rect.min.x, 0.0));
+    }
+    if rect.max.x > bounds.max.x {
+        rect = rect.translate(egui::vec2(bounds.max.x - rect.max.x, 0.0));
+    }
+    if rect.min.y < bounds.min.y {
+        rect = rect.translate(egui::vec2(0.0, bounds.min.y - rect.min.y));
+    }
+    if rect.max.y > bounds.max.y {
+        rect = rect.translate(egui::vec2(0.0, bounds.max.y - rect.max.y));
+    }
+    rect
 }
 
 /// 持有 wgpu 纹理与其在 egui 中的注册 id。选帧/同步已在引擎(`Player::present_frame`)完成,
@@ -166,7 +240,11 @@ impl VideoView {
 
         let panel_rect = ui.available_rect_before_wrap();
         ui.allocate_rect(panel_rect, egui::Sense::hover());
-        let image_rect = fit_rect(panel_rect, egui::vec2(w as f32, h as f32));
+        let image_rect = fit_rect_to_pixels(
+            panel_rect,
+            egui::vec2(w as f32, h as f32),
+            ui.pixels_per_point(),
+        );
         let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
         let shape =
             egui::epaint::RectShape::filled(
@@ -329,10 +407,32 @@ mod tests {
     #[test]
     fn fit_rect_preserves_aspect_inside_container() {
         let container = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let fitted = fit_rect(container, egui::vec2(1920.0, 1080.0));
+        let fitted = fit_rect_to_pixels(container, egui::vec2(1920.0, 1080.0), 1.0);
 
         assert!((fitted.width() - 800.0).abs() < f32::EPSILON);
         assert!((fitted.height() - 450.0).abs() < f32::EPSILON);
         assert_eq!(fitted.center(), container.center());
+    }
+
+    #[test]
+    fn fit_rect_snaps_to_pixels_without_exceeding_container() {
+        let container = egui::Rect::from_min_max(
+            egui::pos2(0.0, crate::titlebar::TITLEBAR_BOTTOM_OFFSET),
+            egui::pos2(1006.33, 600.66),
+        );
+        let pixels_per_point = 2.0;
+        let fitted = fit_rect_to_pixels(container, egui::vec2(1920.0, 1080.0), pixels_per_point);
+        let container_px = rect_to_pixels(container, pixels_per_point);
+        let fitted_px = rect_to_pixels(fitted, pixels_per_point);
+
+        assert!(container_px.contains_rect(fitted_px));
+        assert!(
+            fitted_px.width() == container_px.width()
+                || fitted_px.height() == container_px.height()
+        );
+        assert_eq!(fitted_px.min.x.fract(), 0.0);
+        assert_eq!(fitted_px.max.x.fract(), 0.0);
+        assert_eq!(fitted_px.min.y.fract(), 0.0);
+        assert_eq!(fitted_px.max.y.fract(), 0.0);
     }
 }
