@@ -47,6 +47,24 @@ fn open_file_command_appends_to_existing_playlist_and_selects_new_file() -> std:
 }
 
 #[test]
+fn failed_open_after_playing_leaves_player_stopped() -> std::io::Result<()> {
+    let (dir, a, _b) = two_sample_files("morn_failed_open_after_playing")?;
+    let invalid = dir.join("broken.mp4");
+    std::fs::write(&invalid, b"not a video")?;
+
+    let mut p = Player::new();
+    p.handle(Command::Open(a));
+    assert_eq!(p.timeline().state, PlaybackState::Playing);
+
+    p.handle(Command::Open(invalid));
+
+    assert_eq!(p.timeline().state, PlaybackState::Stopped);
+    assert!(p.video().is_none());
+    let _cleanup = std::fs::remove_dir_all(dir);
+    Ok(())
+}
+
+#[test]
 fn open_files_command_appends_to_existing_playlist_and_selects_first_new_file(
 ) -> std::io::Result<()> {
     let dir = unique_temp_dir("morn_open_files_append")?;

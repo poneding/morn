@@ -103,6 +103,7 @@ impl Player {
 
     pub(super) fn teardown(&mut self) {
         self.playback_ended = false;
+        let _ = self.machine.apply(player_core::Transition::Stop);
         self.audio_stop.store(true, Ordering::Relaxed);
         if let Some(join) = self.audio_join.take() {
             if join.join().is_err() {
