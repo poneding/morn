@@ -32,10 +32,6 @@ pub struct TitlebarActions {
     pub toggle_settings: bool,
 }
 
-pub fn window_corner_radius() -> f32 {
-    WINDOW_CORNER_RADIUS as f32
-}
-
 #[cfg(not(target_os = "macos"))]
 fn paint_window_background(ctx: &egui::Context) {
     // Transparent native windows need an explicit rounded background; otherwise

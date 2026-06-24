@@ -167,12 +167,15 @@ impl VideoView {
         let panel_rect = ui.available_rect_before_wrap();
         ui.allocate_rect(panel_rect, egui::Sense::hover());
         let image_rect = fit_rect(panel_rect, egui::vec2(w as f32, h as f32));
-        // 自绘窗口: 视频需要圆角裁剪，与窗口背景的圆角半径一致。
-        let corner_radius = crate::titlebar::window_corner_radius();
         let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
         let shape =
-            egui::epaint::RectShape::filled(image_rect, corner_radius, egui::Color32::WHITE)
-                .with_texture(id, uv);
+            egui::epaint::RectShape::filled(
+                image_rect,
+                egui::CornerRadius::same(0),
+                egui::Color32::WHITE,
+            )
+            .with_texture(id, uv)
+            .with_round_to_pixels(false);
         ui.painter().add(egui::Shape::Rect(shape));
         Some(image_rect)
     }
@@ -298,10 +301,11 @@ mod tests {
 
         assert!(source.contains("fn fit_rect"));
         assert!(source.contains("ui.allocate_rect"));
-        // 自绘窗口: 视频用圆角裁剪。
-        assert!(source.contains("RectShape::filled(image_rect"));
+        // 视频纹理本身保持直角, 避免裁掉画面内容。
+        assert!(source.contains("RectShape::filled("));
+        assert!(source.contains("CornerRadius::same(0)"));
         assert!(source.contains(".with_texture(id, uv)"));
-        assert!(source.contains("window_corner_radius"));
+        assert!(!source.contains("window_corner_radius"));
         assert!(!source.contains("centered_and_justified"));
         assert!(!source.contains("ui.image((id, draw))"));
     }
