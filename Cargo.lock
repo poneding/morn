@@ -219,7 +219,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "eframe",
  "egui",
@@ -518,7 +518,7 @@ dependencies = [
 
 [[package]]
 name = "audio"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cpal",
  "ringbuf",
@@ -1318,7 +1318,7 @@ checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
 name = "engine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "audio",
  "crossbeam-channel",
@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "media"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "crossbeam-channel",
  "ffmpeg-next",
@@ -2932,7 +2932,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "persist"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -3033,11 +3033,11 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "player-core"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "playground"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "audio",
  "media",
@@ -3324,7 +3324,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "render"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "pollster",
  "wgpu",
@@ -3842,7 +3842,7 @@ checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
 
 [[package]]
 name = "subtitle"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "subtle"
@@ -3863,7 +3863,7 @@ dependencies = [
 
 [[package]]
 name = "sync"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "synstructure"
