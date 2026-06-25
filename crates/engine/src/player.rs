@@ -64,6 +64,7 @@ pub struct Player {
     clock: PlayClock,
     // 当前显示帧(跨重绘保留)与已取出但未到点的未来帧(pending)。选帧逻辑现在在引擎里。
     current_frame: Option<media::VideoFrame>,
+    current_frame_generation: u64,
     pending_frame: Option<media::VideoFrame>,
     present_drops: u32,
     dbg: DebugProbe,
@@ -99,6 +100,7 @@ impl Player {
             playback_ended: false,
             clock: PlayClock::Wall(WallClock::new()),
             current_frame: None,
+            current_frame_generation: 0,
             pending_frame: None,
             present_drops: 0,
             dbg: DebugProbe::new(),
@@ -269,6 +271,12 @@ impl Player {
         self.current_frame
             .as_ref()
             .map(|f| (f.rgba.as_slice(), f.width, f.height))
+    }
+
+    /// Monotonic generation of the cached visible frame. UI renderers use this
+    /// to notice frames advanced while painting was suppressed.
+    pub fn current_frame_generation(&self) -> u64 {
+        self.current_frame_generation
     }
 
     /// 累计丢帧数(供调试 HUD, CP4 用)。

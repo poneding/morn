@@ -105,6 +105,7 @@ impl Player {
 
     fn show_present_frame(&mut self, frame: media::VideoFrame) {
         self.current_frame = Some(frame);
+        self.current_frame_generation = self.current_frame_generation.wrapping_add(1);
         self.dbg.shown += 1;
         self.note_visible_frame_gap();
     }

@@ -145,6 +145,7 @@ pub struct VideoView {
     texture: Option<VideoTexture>,
     tex_id: Option<egui::TextureId>,
     size: (u32, u32),
+    uploaded_frame_generation: u64,
 }
 
 impl VideoView {
@@ -153,6 +154,7 @@ impl VideoView {
             texture: None,
             tex_id: None,
             size: (0, 0),
+            uploaded_frame_generation: 0,
         }
     }
 
@@ -187,13 +189,10 @@ impl VideoView {
     }
 
     fn upload_presented_frame(&mut self, frame: &mut eframe::Frame, player: &mut Player) -> bool {
-        match player.present_frame() {
-            Some(vf) => {
-                self.upload_frame(frame, vf);
-                true
-            }
-            None => false,
+        if player.present_frame().is_none() {
+            return false;
         }
+        self.upload_cached_current_frame(frame, player)
     }
 
     fn upload_cached_frame_if_needed(
@@ -202,13 +201,25 @@ impl VideoView {
         player: &Player,
         uploaded_new_frame: bool,
     ) {
-        // Startup restore can pause before a new present result arrives.  In that
-        // case upload the engine's cached frame so the first screen is not blank.
-        if uploaded_new_frame || self.tex_id.is_some() {
+        // Startup restore can pause before a new present result arrives. Occluded
+        // windows can also advance presentation without painting, IINA-style, so
+        // the cached engine frame may be newer than the currently uploaded texture.
+        if uploaded_new_frame
+            || (self.tex_id.is_some()
+                && self.uploaded_frame_generation == player.current_frame_generation())
+        {
             return;
         }
+        self.upload_cached_current_frame(frame, player);
+    }
+
+    fn upload_cached_current_frame(&mut self, frame: &mut eframe::Frame, player: &Player) -> bool {
         if let Some((rgba, w, h)) = player.current_frame_rgba() {
             self.upload_rgba(frame, rgba, w, h);
+            self.uploaded_frame_generation = player.current_frame_generation();
+            true
+        } else {
+            false
         }
     }
 
@@ -246,20 +257,15 @@ impl VideoView {
             ui.pixels_per_point(),
         );
         let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-        let shape =
-            egui::epaint::RectShape::filled(
-                image_rect,
-                egui::CornerRadius::same(0),
-                egui::Color32::WHITE,
-            )
-            .with_texture(id, uv)
-            .with_round_to_pixels(false);
+        let shape = egui::epaint::RectShape::filled(
+            image_rect,
+            egui::CornerRadius::same(0),
+            egui::Color32::WHITE,
+        )
+        .with_texture(id, uv)
+        .with_round_to_pixels(false);
         ui.painter().add(egui::Shape::Rect(shape));
         Some(image_rect)
-    }
-
-    fn upload_frame(&mut self, frame: &mut eframe::Frame, vf: &media::VideoFrame) {
-        self.upload_rgba(frame, &vf.rgba, vf.width, vf.height);
     }
 
     fn upload_rgba(&mut self, frame: &mut eframe::Frame, rgba: &[u8], width: u32, height: u32) {

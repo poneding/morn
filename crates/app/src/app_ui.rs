@@ -119,6 +119,10 @@ struct BottomControlGroups<'a, 'commands> {
 }
 
 impl eframe::App for PlayerApp {
+    fn logic(&mut self, ctx: &egui::Context, _eframe_frame: &mut eframe::Frame) {
+        self.advance_video_presentation_without_paint(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, eframe_frame: &mut eframe::Frame) {
         // macOS: 首帧把 contentView 的 layer 放置策略改为 topLeft, 掩盖 resize/最大化时
         // 旧帧被拉伸的抖动(详见 macos::apply_resize_glitch_masking)。仅执行一次, 失败
@@ -173,6 +177,29 @@ impl eframe::App for PlayerApp {
 }
 
 impl PlayerApp {
+    fn advance_video_presentation_without_paint(&mut self, ctx: &egui::Context) {
+        let should_advance = ctx.input(|i| {
+            let viewport = i.viewport();
+            video_presentation_should_advance_without_paint(viewport.minimized, viewport.occluded)
+        });
+        if !should_advance {
+            return;
+        }
+
+        self.player.tick();
+        let _ = self.player.present_frame();
+        let interacting = ctx.input(|i| i.pointer.any_down());
+        if player_should_request_repaint(
+            interacting,
+            self.player.timeline().state,
+            self.player.seek_pending(),
+            self.player.video().is_some(),
+            self.video_view.has_texture(),
+        ) {
+            ctx.request_repaint_after(OCCLUDED_VIDEO_PRESENTATION_REPAINT_INTERVAL);
+        }
+    }
+
     fn prepare_ui_frame(
         &mut self,
         ctx: &egui::Context,

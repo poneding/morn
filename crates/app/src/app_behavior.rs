@@ -253,6 +253,13 @@ pub(super) fn should_request_continuous_repaint(
     !interacting && screenshot_notice_visible
 }
 
+pub(super) fn video_presentation_should_advance_without_paint(
+    minimized: Option<bool>,
+    occluded: Option<bool>,
+) -> bool {
+    minimized != Some(true) && occluded == Some(true)
+}
+
 pub(super) fn navigation_shortcut_command(
     platform: crate::shortcuts::ShortcutPlatform,
     modifiers: egui::Modifiers,
@@ -510,6 +517,7 @@ pub(super) fn video_window_resize_size(
     last_resized_video_path: &mut Option<std::path::PathBuf>,
     current_path: Option<std::path::PathBuf>,
     dimensions: Option<(u32, u32)>,
+    current_frame_dimensions: Option<(u32, u32)>,
     fullscreen: bool,
 ) -> Option<egui::Vec2> {
     // Automatic resize is one-shot per selected video and disabled in fullscreen
@@ -521,7 +529,12 @@ pub(super) fn video_window_resize_size(
     if last_resized_video_path.as_ref() == Some(&current_path) {
         return None;
     }
-    let (width, height) = dimensions?;
+    let decoder_dimensions = dimensions?;
+    let frame_dimensions = current_frame_dimensions?;
+    if frame_dimensions != decoder_dimensions {
+        return None;
+    }
+    let (width, height) = frame_dimensions;
     let size = window_size_for_video_dimensions(width, height)?;
     *last_resized_video_path = Some(current_path);
     Some(size)

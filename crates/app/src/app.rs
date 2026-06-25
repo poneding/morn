@@ -41,6 +41,8 @@ const CONTROL_BAR_INNER_PADDING_X: i8 = crate::visuals::FLOATING_PANEL_INNER_MAR
 const CONTROLS_IDLE_HIDE_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
 const OVERLAY_HOVER_RECHECK_GRACE: std::time::Duration = std::time::Duration::from_millis(150);
 const WINDOW_RESIZE_REPAINT_GRACE: std::time::Duration = std::time::Duration::from_millis(150);
+const OCCLUDED_VIDEO_PRESENTATION_REPAINT_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(16);
 const PLAYLIST_SHEET_INNER_MARGIN_X: i8 = crate::visuals::FLOATING_PANEL_INNER_MARGIN_X;
 const PLAYLIST_SHEET_INNER_MARGIN_Y: i8 = crate::visuals::FLOATING_CONTROL_BAR_INNER_MARGIN_Y;
 // 提示标语锚定在标题栏下方, 不遮挡标题栏(macOS 红绿灯/自绘标题)。
@@ -418,11 +420,16 @@ impl PlayerApp {
     fn current_video_resize_request(&mut self, ctx: &egui::Context) -> Option<egui::Vec2> {
         let current_path = self.current_playlist_path();
         let dimensions = self.player.current_video_dimensions();
+        let current_frame_dimensions = self
+            .player
+            .current_frame_rgba()
+            .map(|(_rgba, width, height)| (width, height));
         let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
         video_window_resize_size(
             &mut self.last_window_resized_video_path,
             current_path,
             dimensions,
+            current_frame_dimensions,
             fullscreen,
         )
     }

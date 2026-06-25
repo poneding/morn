@@ -71,12 +71,14 @@ impl ResizeHarness {
         &mut self,
         path: &str,
         dimensions: (u32, u32),
+        current_frame_dimensions: Option<(u32, u32)>,
         fullscreen: bool,
     ) -> Option<egui::Vec2> {
         super::video_window_resize_size(
             &mut self.last,
             Some(std::path::PathBuf::from(path)),
             Some(dimensions),
+            current_frame_dimensions,
             fullscreen,
         )
     }
@@ -101,21 +103,43 @@ fn app_width_budget_preserves_sidebar_and_video_minimums() {
 fn video_window_resize_tracks_current_video_once_and_waits_out_fullscreen() {
     let mut resize = ResizeHarness::default();
 
-    let first = resize.request("/wide.mp4", (1920, 1080), false).unwrap();
+    assert_eq!(resize.request("/wide.mp4", (1920, 1080), None, false), None);
+    assert!(!resize.last_is("/wide.mp4"));
+
+    let first = resize
+        .request("/wide.mp4", (1920, 1080), Some((1920, 1080)), false)
+        .unwrap();
     // 16:9: inner_width = (600 - 28) * 16/9, inner_height = 600
     assert!((first.x - 1016.8889).abs() < 0.01);
     assert!((first.y - 600.0).abs() < 0.01);
     assert!(resize.last_is("/wide.mp4"));
 
-    assert_eq!(resize.request("/wide.mp4", (1920, 1080), false), None);
+    assert_eq!(
+        resize.request("/wide.mp4", (1920, 1080), Some((1920, 1080)), false),
+        None
+    );
 
-    assert_eq!(resize.request("/squareish.mp4", (160, 120), true), None);
+    assert_eq!(
+        resize.request("/squareish.mp4", (160, 120), Some((160, 120)), true),
+        None
+    );
     assert!(!resize.last_is("/squareish.mp4"));
 
-    let second = resize.request("/squareish.mp4", (160, 120), false).unwrap();
+    assert_eq!(
+        resize.request("/squareish.mp4", (160, 120), None, false),
+        None
+    );
+    assert!(!resize.last_is("/squareish.mp4"));
+
+    let second = resize
+        .request("/squareish.mp4", (160, 120), Some((160, 120)), false)
+        .unwrap();
     // 4:3 clamped to APP_MIN_WIDTH: video_height = 920 * 3/4, inner_height = 690 + 28
     assert!((second.x - super::APP_MIN_WIDTH).abs() < 0.01);
     assert!((second.y - 718.0).abs() < 0.01);
+
+    let source = app_source();
+    assert!(source.contains("current_frame_rgba"));
 }
 
 #[test]
@@ -569,6 +593,37 @@ fn continuous_repaint_is_only_requested_when_needed() {
     // 播放态连续重绘(取代旧的 frame_pending 唤醒)。
     assert!(source.contains("ctx.request_repaint()"));
     assert!(!source.contains("take_frame_pending"));
+}
+
+#[test]
+fn occluded_video_presentation_advances_without_paint_unless_minimized() {
+    assert!(super::video_presentation_should_advance_without_paint(
+        Some(false),
+        Some(true),
+    ));
+    assert!(!super::video_presentation_should_advance_without_paint(
+        Some(true),
+        Some(true),
+    ));
+    assert!(!super::video_presentation_should_advance_without_paint(
+        Some(false),
+        Some(false),
+    ));
+
+    let source = app_source();
+    assert!(source.contains("fn logic(&mut self, ctx: &egui::Context"));
+    assert!(source.contains("advance_video_presentation_without_paint"));
+    assert!(source.contains("let _ = self.player.present_frame();"));
+    let occluded_source = source
+        .split("fn advance_video_presentation_without_paint")
+        .nth(1)
+        .unwrap_or_default()
+        .split("fn prepare_ui_frame")
+        .next()
+        .unwrap_or_default();
+    assert!(occluded_source
+        .contains("ctx.request_repaint_after(OCCLUDED_VIDEO_PRESENTATION_REPAINT_INTERVAL)"));
+    assert!(!occluded_source.contains("self.request_player_repaint(ctx)"));
 }
 
 #[test]

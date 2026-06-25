@@ -79,6 +79,25 @@ fn set_settings_tab_state(ctx: &egui::Context, tab: SettingsTab) {
     ctx.data_mut(|d| d.insert_temp(id, tab));
 }
 
+fn settings_combo_popup_open_id() -> egui::Id {
+    egui::Id::new("settings_combo_popup_open")
+}
+
+fn reset_settings_combo_popup_open(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(settings_combo_popup_open_id(), false));
+}
+
+fn mark_settings_combo_popup_open(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(settings_combo_popup_open_id(), true));
+}
+
+fn settings_combo_popup_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| {
+        d.get_temp::<bool>(settings_combo_popup_open_id())
+            .unwrap_or(false)
+    })
+}
+
 /// 绘制设置窗口。`open` 控制显隐, 直接读写 player 的偏好。
 pub fn settings_window(
     ctx: &egui::Context,
@@ -96,6 +115,7 @@ pub fn settings_window(
     let max_height = settings_max_height(ctx);
     let body_height = settings_body_height(ctx);
     let mut active_tab = settings_tab_state(ctx);
+    reset_settings_combo_popup_open(ctx);
     egui::Window::new("settings")
         .id(egui::Id::new("settings_window"))
         .title_bar(false)
@@ -128,13 +148,20 @@ pub fn settings_window(
     // 设置面板与播放列表同属 Foreground; egui 同 Order 内的层级会随打开/点击顺序
     // 动态变化(area.rs: 每次可见或被点击都 move_to_top), 无法保证设置始终在上。
     // 故每帧显式把设置提到 Foreground 最上层, 确保它盖在播放列表之上。
+    // 但 ComboBox 弹层也在 Foreground; 下拉打开时不能再把窗口压到弹层上面。
+    if !settings_combo_popup_open(ctx) {
+        promote_settings_window(ctx);
+    }
+    set_settings_tab_state(ctx, active_tab);
+}
+
+fn promote_settings_window(ctx: &egui::Context) {
     ctx.memory_mut(|m| {
         m.areas_mut().move_to_top(egui::LayerId::new(
             egui::Order::Foreground,
             egui::Id::new("settings_window"),
         ));
     });
-    set_settings_tab_state(ctx, active_tab);
 }
 
 /// 设置窗口最大高度: 屏高减去顶/底安全留白与控制栏占位, 居中显示时
@@ -173,22 +200,53 @@ fn settings_header(ui: &mut egui::Ui, open: &mut bool) {
 }
 
 fn settings_tab_bar(ui: &mut egui::Ui, active: &mut SettingsTab) {
-    ui.scope(|ui| {
-        ui.spacing_mut().button_padding.x = SETTINGS_TAB_PADDING_X;
-        ui.horizontal(|ui| {
-            for tab in SettingsTab::ALL {
-                if ui
-                    .add(
-                        egui::Button::selectable(*active == tab, tab.label())
-                            .min_size(egui::vec2(0.0, SETTINGS_ROW_HEIGHT)),
-                    )
-                    .clicked()
-                {
-                    *active = tab;
-                }
+    ui.horizontal(|ui| {
+        for tab in SettingsTab::ALL {
+            let label = tab.label();
+            if settings_tab_button(ui, *active == tab, &label).clicked() {
+                *active = tab;
             }
-        });
+        }
     });
+}
+
+fn settings_tab_button(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
+    let galley = egui::WidgetText::from(label.to_owned()).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    let tab_size = egui::vec2(
+        galley.size().x + SETTINGS_TAB_PADDING_X * 2.0,
+        SETTINGS_ROW_HEIGHT,
+    );
+    let (rect, response) = ui.allocate_exact_size(tab_size, egui::Sense::click());
+
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, selected);
+        if selected || response.hovered() || response.contains_pointer() {
+            ui.painter().rect_filled(
+                rect.shrink(0.5),
+                crate::visuals::CONTROL_CORNER_RADIUS,
+                visuals.weak_bg_fill,
+            );
+            ui.painter().rect_stroke(
+                rect.shrink(0.5),
+                crate::visuals::CONTROL_CORNER_RADIUS,
+                visuals.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        let text_pos = egui::pos2(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        );
+        ui.painter()
+            .galley(text_pos, galley, visuals.fg_stroke.color);
+    }
+
+    response
 }
 
 fn settings_close_button(ui: &mut egui::Ui) -> egui::Response {
@@ -515,20 +573,25 @@ fn settings_combo<R>(
     selected_text: impl Into<egui::WidgetText>,
     add_options: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
-    ui.scope(|ui| {
-        ui.spacing_mut().interact_size.y = SETTINGS_ROW_HEIGHT;
-        egui::ComboBox::from_id_salt(id_salt)
-            .width(SETTINGS_COMBO_WIDTH)
-            .height(SETTINGS_COMBO_POPUP_HEIGHT)
-            .selected_text(selected_text)
-            .popup_style(crate::visuals::panel_popup_style())
-            .show_ui(ui, |ui| {
-                ui.spacing_mut().interact_size.y = SETTINGS_ROW_HEIGHT;
-                ui.spacing_mut().item_spacing.y = 0.0;
-                add_options(ui)
-            })
-    })
-    .inner
+    let inner = ui
+        .scope(|ui| {
+            ui.spacing_mut().interact_size.y = SETTINGS_ROW_HEIGHT;
+            egui::ComboBox::from_id_salt(id_salt)
+                .width(SETTINGS_COMBO_WIDTH)
+                .height(SETTINGS_COMBO_POPUP_HEIGHT)
+                .selected_text(selected_text)
+                .popup_style(crate::visuals::panel_popup_style())
+                .show_ui(ui, |ui| {
+                    ui.spacing_mut().interact_size.y = SETTINGS_ROW_HEIGHT;
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    add_options(ui)
+                })
+        })
+        .inner;
+    if egui::ComboBox::is_open(ui.ctx(), inner.response.id) {
+        mark_settings_combo_popup_open(ui.ctx());
+    }
+    inner
 }
 
 fn settings_checkbox(ui: &mut egui::Ui, checked: &mut bool) -> egui::Response {
@@ -641,7 +704,7 @@ mod tests {
         let source = source_before_tests();
 
         assert!(source.contains("const SETTINGS_TAB_PADDING_X: f32 = 14.0"));
-        assert!(source.contains("ui.spacing_mut().button_padding.x = SETTINGS_TAB_PADDING_X"));
+        assert!(source.contains("galley.size().x + SETTINGS_TAB_PADDING_X * 2.0"));
         assert!(source.contains("ui.horizontal(|ui|"));
     }
 
@@ -693,6 +756,32 @@ mod tests {
         assert!(source.contains("settings_combo(ui, \"lang\""));
         assert!(source.contains("\"seek_step\""));
         assert!(source.contains("settings_combo(ui, \"playback_mode\""));
+    }
+
+    #[test]
+    fn settings_tabs_use_fixed_rects_so_hover_cannot_change_layout() {
+        let source = source_before_tests();
+        let tab_bar = source
+            .split("fn settings_tab_bar")
+            .nth(1)
+            .unwrap_or_default()
+            .split("fn settings_close_button")
+            .next()
+            .unwrap_or_default();
+
+        assert!(tab_bar.contains("settings_tab_button"));
+        assert!(tab_bar.contains("allocate_exact_size"));
+        assert!(!tab_bar.contains("Button::selectable"));
+    }
+
+    #[test]
+    fn settings_window_does_not_cover_its_combo_popups() {
+        let source = source_before_tests();
+
+        assert!(source.contains("mark_settings_combo_popup_open"));
+        assert!(source.contains("settings_combo_popup_open(ctx)"));
+        assert!(source.contains("if !settings_combo_popup_open(ctx)"));
+        assert!(source.contains("move_to_top"));
     }
 
     #[test]
