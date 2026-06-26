@@ -187,8 +187,7 @@ impl Player {
     fn reset_playback_resources(&mut self) {
         self.duration_ms = 0;
         self.clock = PlayClock::Wall(WallClock::new());
-        self.current_frame = None;
-        self.pending_frame = None;
+        self.clear_presented_frame();
         self.present_drops = 0;
         self.audio_stop = Arc::new(AtomicBool::new(false));
         self.audio_seek = Arc::new(AtomicU64::new(u64::MAX));

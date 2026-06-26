@@ -36,8 +36,7 @@ impl Player {
         };
         self.playback_ended = false;
         let gate = self.request_video_seek_gate(target, mode);
-        self.current_frame = None;
-        self.pending_frame = None;
+        self.clear_presented_frame();
         self.prepare_audio_for_seek(target, mode);
         self.clock.reset_to(target);
         self.seek_gate = gate;

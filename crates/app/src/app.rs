@@ -424,13 +424,19 @@ impl PlayerApp {
             .player
             .current_frame_rgba()
             .map(|(_rgba, width, height)| (width, height));
-        let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        let (fullscreen, maximized) = ctx.input(|i| {
+            (
+                i.viewport().fullscreen.unwrap_or(false),
+                i.viewport().maximized.unwrap_or(false),
+            )
+        });
         video_window_resize_size(
             &mut self.last_window_resized_video_path,
             current_path,
             dimensions,
             current_frame_dimensions,
             fullscreen,
+            maximized,
         )
     }
 
@@ -472,7 +478,12 @@ impl PlayerApp {
             .handle(player_core::Command::OpenFiles(vec![path]));
     }
 
-    fn show_video_panel(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    fn show_video_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &mut eframe::Frame,
+        resizing: bool,
+    ) {
         let mut video_commands = Vec::new();
         let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
         egui::CentralPanel::no_frame().show_inside(ui, |ui| {
@@ -480,7 +491,7 @@ impl PlayerApp {
             if !fullscreen {
                 ui.add_space(crate::titlebar::TITLEBAR_BOTTOM_OFFSET);
             }
-            video_commands = self.video_view.show(ui, frame, &mut self.player);
+            video_commands = self.video_view.show(ui, frame, &mut self.player, resizing);
         });
         for cmd in video_commands {
             self.handle_command(cmd);

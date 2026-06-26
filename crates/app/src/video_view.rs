@@ -23,13 +23,32 @@ fn empty_state_contents(ui: &mut egui::Ui, commands: &mut Vec<Command>) {
     ui.vertical_centered(|ui| {
         ui.label(t!("drop_hint").to_string());
         ui.add_space(8.0);
-
-        // 使用图标+文本的按钮
-        let button_text = format!("+ {}", t!("open_file"));
-        if ui.button(button_text).clicked() {
+        if open_file_text_button(ui).clicked() {
             commands.push(Command::OpenDialog);
         }
     });
+}
+
+fn open_file_text_button(ui: &mut egui::Ui) -> egui::Response {
+    let text = format!("+ {}", t!("open_file"));
+    let galley =
+        egui::WidgetText::from(text).into_galley(ui, None, f32::INFINITY, egui::TextStyle::Button);
+    let galley_size = galley.size();
+    let size = egui::vec2(
+        galley_size.x + f32::from(crate::visuals::FLOATING_PANEL_INNER_MARGIN_X) * 2.0,
+        crate::visuals::ICON_BUTTON_SIZE,
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    crate::visuals::beveled_button_frame_at(ui, rect, &response, false, 1.0);
+    ui.painter().galley(
+        rect.center() - galley_size * 0.5,
+        galley,
+        ui.style().interact(&response).fg_stroke.color,
+    );
+    response.on_hover_text(crate::shortcuts::shortcut_tooltip(
+        t!("open_file"),
+        crate::shortcuts::open_shortcut_label(),
+    ))
 }
 
 fn empty_state_top_padding(ui: &egui::Ui) -> f32 {
@@ -164,17 +183,36 @@ impl VideoView {
 
     /// 每帧调用: 取引擎按主时钟选出的当前帧并绘制。`present_frame` 返回 None 表示
     /// 画面无变化(沿用上一帧纹理)——暂停/未到点/队列暂空都走这条, 不重复上传。
+    ///
+    /// `resizing` 时跳过纹理上传与绘制: 播放时钟已在 prepare_ui_frame 暂停,
+    /// 此时只分配面板区域而不绘制视频, 让 TopLeft 锚定的旧帧在动画期间保持不动,
+    /// 避免每帧重新 fit+upload 造成的弹动拉伸。动画结束后一次性 fit 到正确尺寸。
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         frame: &mut eframe::Frame,
         player: &mut Player,
+        resizing: bool,
     ) -> Vec<Command> {
         let mut commands = Vec::new();
 
+        if resizing {
+            // 缩放进行中: 不推进帧、不上传纹理、也不绘制视频, 旧帧挂左上角不动。
+            let texture_current = false;
+            let _subtitle_rect = self.show_video_content(
+                ui,
+                player.video().is_some(),
+                texture_current,
+                &mut commands,
+            );
+            return commands;
+        }
+
         let uploaded_new_frame = self.upload_presented_frame(frame, player);
         self.upload_cached_frame_if_needed(frame, player, uploaded_new_frame);
-        let subtitle_rect = self.show_video_content(ui, player.video().is_some(), &mut commands);
+        let texture_current = self.texture_matches_current_frame(player);
+        let subtitle_rect =
+            self.show_video_content(ui, player.video().is_some(), texture_current, &mut commands);
 
         if let Some(text) = player.current_subtitle() {
             crate::subtitle_overlay::draw_subtitle(
@@ -186,6 +224,12 @@ impl VideoView {
         }
 
         commands
+    }
+
+    fn texture_matches_current_frame(&self, player: &Player) -> bool {
+        self.tex_id.is_some()
+            && self.uploaded_frame_generation == player.current_frame_generation()
+            && player.current_frame_rgba().is_some()
     }
 
     fn upload_presented_frame(&mut self, frame: &mut eframe::Frame, player: &mut Player) -> bool {
@@ -227,10 +271,13 @@ impl VideoView {
         &self,
         ui: &mut egui::Ui,
         has_video: bool,
+        texture_current: bool,
         commands: &mut Vec<Command>,
     ) -> egui::Rect {
-        if let Some(rect) = self.paint_current_texture(ui) {
-            return rect;
+        if texture_current {
+            if let Some(rect) = self.paint_current_texture(ui) {
+                return rect;
+            }
         }
         if !has_video {
             commands.extend(empty_state(ui));
@@ -326,6 +373,19 @@ mod tests {
     }
 
     #[test]
+    fn empty_state_open_button_uses_shared_beveled_style() {
+        let source = include_str!("video_view.rs")
+            .split("fn empty_state_top_padding")
+            .next()
+            .unwrap();
+
+        assert!(source.contains("fn open_file_text_button"));
+        assert!(source.contains("beveled_button_frame_at"));
+        assert!(source.contains("ICON_BUTTON_SIZE"));
+        assert!(!source.contains("ui.button("));
+    }
+
+    #[test]
     fn empty_state_centers_hint_and_actions() {
         let source = include_str!("video_view.rs")
             .split("/// 持有 wgpu")
@@ -369,6 +429,10 @@ mod tests {
 
         assert!(source.contains("player.present_frame()"));
         assert!(source.contains("upload_cached_frame_if_needed"));
+        assert!(source.contains("texture_matches_current_frame"));
+        assert!(
+            source.contains("self.uploaded_frame_generation == player.current_frame_generation()")
+        );
         assert!(source.contains("self.tex_id.is_some()"));
         assert!(source.contains("player.current_frame_rgba()"));
         assert!(!source.contains("decide_frame"));

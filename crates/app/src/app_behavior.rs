@@ -519,10 +519,11 @@ pub(super) fn video_window_resize_size(
     dimensions: Option<(u32, u32)>,
     current_frame_dimensions: Option<(u32, u32)>,
     fullscreen: bool,
+    maximized: bool,
 ) -> Option<egui::Vec2> {
     // Automatic resize is one-shot per selected video and disabled in fullscreen
-    // so it never fights user-driven window state.
-    if fullscreen {
+    // or maximized mode so it never fights user-driven window state.
+    if fullscreen || maximized {
         return None;
     }
     let current_path = current_path?;

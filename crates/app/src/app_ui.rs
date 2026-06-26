@@ -138,7 +138,12 @@ impl eframe::App for PlayerApp {
         self.sync_runtime_preferences(&ctx);
         self.handle_dropped_files(&ctx);
 
-        let (timeline, shortcut_outcome) = self.prepare_ui_frame(&ctx);
+        // 窗口正在缩放(含全屏切换动画): 跳过播放推进与纹理绘制, 让 TopLeft
+        // 锚定的旧帧保持不动, 避免每帧重复 fit+upload 造成的弹动拉伸。
+        let now = std::time::Instant::now();
+        let resizing = should_request_window_resize_repaint(self.last_window_resize, now);
+
+        let (timeline, shortcut_outcome) = self.prepare_ui_frame(&ctx, resizing);
         let mut state = UiFrameState::snapshot(
             &ctx,
             self,
@@ -148,7 +153,7 @@ impl eframe::App for PlayerApp {
 
         self.show_titlebar(&ctx, &mut state);
 
-        self.show_video_panel(ui, eframe_frame);
+        self.show_video_panel(ui, eframe_frame, resizing);
         self.update_pointer_activity(&mut state);
         self.show_playlist_overlay(&ctx, &mut state);
         self.show_bottom_controls_overlay(&ctx, timeline, &mut state);
@@ -203,8 +208,12 @@ impl PlayerApp {
     fn prepare_ui_frame(
         &mut self,
         ctx: &egui::Context,
+        resizing: bool,
     ) -> (engine::Timeline, KeyboardShortcutOutcome) {
-        self.player.tick();
+        // 窗口缩放期间暂停播放时钟推进, 减少动画期间的解码与上传开销。
+        if !resizing {
+            self.player.tick();
+        }
         self.update_check.poll();
         let timeline = self.player.timeline();
         let shortcut_outcome = self.handle_keyboard_shortcuts(ctx, timeline);

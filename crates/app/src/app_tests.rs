@@ -73,6 +73,7 @@ impl ResizeHarness {
         dimensions: (u32, u32),
         current_frame_dimensions: Option<(u32, u32)>,
         fullscreen: bool,
+        maximized: bool,
     ) -> Option<egui::Vec2> {
         super::video_window_resize_size(
             &mut self.last,
@@ -80,6 +81,7 @@ impl ResizeHarness {
             Some(dimensions),
             current_frame_dimensions,
             fullscreen,
+            maximized,
         )
     }
 
@@ -100,14 +102,17 @@ fn app_width_budget_preserves_sidebar_and_video_minimums() {
 }
 
 #[test]
-fn video_window_resize_tracks_current_video_once_and_waits_out_fullscreen() {
+fn video_window_resize_tracks_current_video_once_and_waits_out_window_states() {
     let mut resize = ResizeHarness::default();
 
-    assert_eq!(resize.request("/wide.mp4", (1920, 1080), None, false), None);
+    assert_eq!(
+        resize.request("/wide.mp4", (1920, 1080), None, false, false),
+        None
+    );
     assert!(!resize.last_is("/wide.mp4"));
 
     let first = resize
-        .request("/wide.mp4", (1920, 1080), Some((1920, 1080)), false)
+        .request("/wide.mp4", (1920, 1080), Some((1920, 1080)), false, false)
         .unwrap();
     // 16:9: inner_width = (600 - 28) * 16/9, inner_height = 600
     assert!((first.x - 1016.8889).abs() < 0.01);
@@ -115,24 +120,30 @@ fn video_window_resize_tracks_current_video_once_and_waits_out_fullscreen() {
     assert!(resize.last_is("/wide.mp4"));
 
     assert_eq!(
-        resize.request("/wide.mp4", (1920, 1080), Some((1920, 1080)), false),
+        resize.request("/wide.mp4", (1920, 1080), Some((1920, 1080)), false, false),
         None
     );
 
     assert_eq!(
-        resize.request("/squareish.mp4", (160, 120), Some((160, 120)), true),
+        resize.request("/squareish.mp4", (160, 120), Some((160, 120)), true, false),
         None
     );
     assert!(!resize.last_is("/squareish.mp4"));
 
     assert_eq!(
-        resize.request("/squareish.mp4", (160, 120), None, false),
+        resize.request("/squareish.mp4", (160, 120), Some((160, 120)), false, true),
+        None
+    );
+    assert!(!resize.last_is("/squareish.mp4"));
+
+    assert_eq!(
+        resize.request("/squareish.mp4", (160, 120), None, false, false),
         None
     );
     assert!(!resize.last_is("/squareish.mp4"));
 
     let second = resize
-        .request("/squareish.mp4", (160, 120), Some((160, 120)), false)
+        .request("/squareish.mp4", (160, 120), Some((160, 120)), false, false)
         .unwrap();
     // 4:3 clamped to APP_MIN_WIDTH: video_height = 920 * 3/4, inner_height = 690 + 28
     assert!((second.x - super::APP_MIN_WIDTH).abs() < 0.01);
@@ -140,6 +151,7 @@ fn video_window_resize_tracks_current_video_once_and_waits_out_fullscreen() {
 
     let source = app_source();
     assert!(source.contains("current_frame_rgba"));
+    assert!(source.contains("viewport().maximized.unwrap_or(false)"));
 }
 
 #[test]

@@ -170,7 +170,6 @@ impl PlayerApp {
             }
             EscapeShortcutAction::ExitFullscreen => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-                self.set_shortcut_notice(t!("fullscreen_exited").to_string());
             }
             EscapeShortcutAction::None => {}
         }
@@ -384,13 +383,7 @@ impl PlayerApp {
     }
 
     fn handle_fullscreen_shortcut(&mut self, ctx: &egui::Context) -> bool {
-        let fullscreen = viewport_is_fullscreen(ctx);
         controls::toggle_fullscreen(ctx);
-        self.set_shortcut_notice(if fullscreen {
-            t!("fullscreen_exited").to_string()
-        } else {
-            t!("fullscreen_entered").to_string()
-        });
         true
     }
 

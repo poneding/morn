@@ -51,6 +51,12 @@ impl DebugProbe {
 }
 
 impl Player {
+    pub(super) fn clear_presented_frame(&mut self) {
+        self.current_frame = None;
+        self.pending_frame = None;
+        self.current_frame_generation = self.current_frame_generation.wrapping_add(1);
+    }
+
     /// 按主时钟推进选帧, 返回本次需要新上传的帧。None 表示画面不变。
     pub fn present_frame(&mut self) -> Option<&media::VideoFrame> {
         self.maybe_release_seek_gate();
