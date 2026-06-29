@@ -15,5 +15,6 @@ pub const RATE_DROPDOWN: &str = "▼";
 pub const SCREENSHOT: &str = "📷";
 pub const FOLDER: &str = "📁";
 pub const REFRESH: &str = "↻";
+pub const DOWNLOAD: &str = "⇩";
 pub const PLAYLIST: &str = "☰";
 pub const SETTINGS: &str = "⚙";

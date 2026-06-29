@@ -61,6 +61,8 @@ crates/
 
 下载后按系统习惯安装即可：macOS 打开 `.dmg` 后将 `Morn.app` 拖到 `Applications` 文件夹，Windows 运行安装程序，Linux 可直接运行 `.AppImage` 或使用系统包管理器安装 `.deb` / `.rpm`。
 
+已安装的 Morn 也可以在设置的“更新”页检查新版本。发现新版本后，应用会自动选择当前系统和架构匹配的 Release 安装包，下载完成后打开安装包继续升级。
+
 ## 开发
 
 运行桌面播放器：

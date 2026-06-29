@@ -251,6 +251,26 @@ open_release_page:
   en: Open Release Page
   zh-CN: 打开发布页面
   zh-TW: 開啟發布頁面
+install_update:
+  en: Install Update
+  zh-CN: 安装更新
+  zh-TW: 安裝更新
+downloading_update:
+  en: Downloading update installer
+  zh-CN: 正在下载更新安装包
+  zh-TW: 正在下載更新安裝包
+update_installer_opened:
+  en: Installer opened. Follow the installer to finish upgrading
+  zh-CN: 已打开安装包，请按安装程序完成升级
+  zh-TW: 已開啟安裝包，請依安裝程式完成升級
+update_install_failed:
+  en: Update install failed
+  zh-CN: 安装更新失败
+  zh-TW: 安裝更新失敗
+update_installer_missing:
+  en: This release has no installer for your system.
+  zh-CN: 该版本没有适用于当前系统的安装包。
+  zh-TW: 此版本沒有適用於目前系統的安裝包。
 update_channel_stable:
   en: stable
   zh-CN: 稳定版

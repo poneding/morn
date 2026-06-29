@@ -16,8 +16,15 @@
 use rust_i18n::t;
 use semver::Version;
 use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateAsset {
+    pub name: String,
+    pub download_url: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvailableUpdate {
@@ -26,21 +33,34 @@ pub struct AvailableUpdate {
     pub name: String,
     pub html_url: String,
     pub prerelease: bool,
+    pub installer: Option<UpdateAsset>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedInstaller {
+    pub update: AvailableUpdate,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub enum UpdateStatus {
     Idle,
     Checking,
     UpToDate,
     Available(AvailableUpdate),
+    DownloadingInstaller(AvailableUpdate),
+    InstallerOpened(OpenedInstaller),
+    InstallError {
+        update: AvailableUpdate,
+        message: String,
+    },
     Error(String),
 }
 
 pub struct UpdateChecker {
     current_version: String,
     status: UpdateStatus,
-    receiver: Option<mpsc::Receiver<Result<Option<AvailableUpdate>, String>>>,
+    receiver: Option<mpsc::Receiver<UpdateJobResult>>,
 }
 
 impl UpdateChecker {
@@ -60,6 +80,13 @@ impl UpdateChecker {
         matches!(self.status, UpdateStatus::Checking)
     }
 
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self.status,
+            UpdateStatus::Checking | UpdateStatus::DownloadingInstaller(_)
+        )
+    }
+
     pub fn status(&self) -> &UpdateStatus {
         &self.status
     }
@@ -75,9 +102,27 @@ impl UpdateChecker {
         // that channel anymore.
         std::thread::spawn(move || {
             let result = check_for_update(&current_version, include_prereleases);
-            let send_result = sender.send(result);
+            let send_result = sender.send(UpdateJobResult::Check(result));
             if send_result.is_err() {
                 // The settings window may close before a background check finishes.
+            }
+        });
+    }
+
+    pub fn begin_install(&mut self, update: AvailableUpdate) {
+        if self.is_busy() {
+            return;
+        }
+
+        self.status = UpdateStatus::DownloadingInstaller(update.clone());
+        let (sender, receiver) = mpsc::channel();
+        self.receiver = Some(receiver);
+
+        std::thread::spawn(move || {
+            let result = download_and_open_installer(update);
+            let send_result = sender.send(UpdateJobResult::Install(result));
+            if send_result.is_err() {
+                // The settings window may close before a background install task finishes.
             }
         });
     }
@@ -93,11 +138,26 @@ impl UpdateChecker {
         };
         self.receiver = None;
         self.status = match result {
-            Ok(Some(update)) => UpdateStatus::Available(update),
-            Ok(None) => UpdateStatus::UpToDate,
-            Err(e) => UpdateStatus::Error(e),
+            UpdateJobResult::Check(Ok(Some(update))) => UpdateStatus::Available(update),
+            UpdateJobResult::Check(Ok(None)) => UpdateStatus::UpToDate,
+            UpdateJobResult::Check(Err(e)) => UpdateStatus::Error(e),
+            UpdateJobResult::Install(Ok(opened)) => UpdateStatus::InstallerOpened(opened),
+            UpdateJobResult::Install(Err(err)) => UpdateStatus::InstallError {
+                update: *err.update,
+                message: err.message,
+            },
         };
     }
+}
+
+enum UpdateJobResult {
+    Check(Result<Option<AvailableUpdate>, String>),
+    Install(Result<OpenedInstaller, UpdateInstallError>),
+}
+
+struct UpdateInstallError {
+    update: Box<AvailableUpdate>,
+    message: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -107,6 +167,14 @@ struct GithubRelease {
     html_url: String,
     prerelease: bool,
     draft: bool,
+    #[serde(default)]
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
 }
 
 #[derive(Clone, Copy)]
@@ -262,11 +330,252 @@ fn select_latest_update(
                 .unwrap_or_else(|| release.tag_name.clone()),
             html_url: release.html_url.clone(),
             prerelease: release.prerelease,
+            installer: release_asset_for_current_platform(&release.assets),
         })
 }
 
 fn strip_tag_prefix(tag: &str) -> &str {
     tag.strip_prefix('v').unwrap_or(tag)
+}
+
+fn release_asset_for_current_platform(assets: &[GithubAsset]) -> Option<UpdateAsset> {
+    release_asset_for_target(
+        assets,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        linux_package_preference(),
+    )
+}
+
+fn release_asset_for_target(
+    assets: &[GithubAsset],
+    os: &str,
+    arch: &str,
+    linux_preference: LinuxPackagePreference,
+) -> Option<UpdateAsset> {
+    let suffix = target_asset_suffix(os, arch)?;
+    let extensions = preferred_asset_extensions(os, linux_preference);
+    extensions
+        .into_iter()
+        .find_map(|extension| release_asset_with_extension(assets, suffix, extension))
+}
+
+fn release_asset_with_extension(
+    assets: &[GithubAsset],
+    suffix: &str,
+    extension: &str,
+) -> Option<UpdateAsset> {
+    let extension = extension.to_ascii_lowercase();
+    assets.iter().find_map(|asset| {
+        let name = asset.name.to_ascii_lowercase();
+        (name.contains(suffix)
+            && name.ends_with(&extension)
+            && !asset.browser_download_url.trim().is_empty())
+        .then(|| UpdateAsset {
+            name: asset.name.clone(),
+            download_url: asset.browser_download_url.clone(),
+        })
+    })
+}
+
+fn target_asset_suffix(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("macos", "x86_64") => Some("macos-x86_64"),
+        ("macos", "aarch64") => Some("macos-arm64"),
+        ("windows", "x86_64") => Some("windows-x86_64"),
+        ("windows", "aarch64") => Some("windows-arm64"),
+        ("linux", "x86_64") => Some("linux-x86_64"),
+        ("linux", "aarch64") => Some("linux-arm64"),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinuxPackagePreference {
+    Deb,
+    Rpm,
+    AppImage,
+}
+
+fn preferred_asset_extensions(
+    os: &str,
+    linux_preference: LinuxPackagePreference,
+) -> Vec<&'static str> {
+    match os {
+        "macos" => vec![".dmg"],
+        // The NSIS installer is easier to launch from the app. MSI remains a
+        // fallback for releases that omit the executable installer.
+        "windows" => vec![".exe", ".msi"],
+        "linux" => match linux_preference {
+            LinuxPackagePreference::Deb => vec![".deb", ".appimage", ".rpm"],
+            LinuxPackagePreference::Rpm => vec![".rpm", ".appimage", ".deb"],
+            LinuxPackagePreference::AppImage => vec![".appimage", ".deb", ".rpm"],
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn linux_package_preference() -> LinuxPackagePreference {
+    if std::env::consts::OS != "linux" {
+        return LinuxPackagePreference::AppImage;
+    }
+    if command_exists("dpkg") {
+        LinuxPackagePreference::Deb
+    } else if command_exists("rpm") {
+        LinuxPackagePreference::Rpm
+    } else {
+        LinuxPackagePreference::AppImage
+    }
+}
+
+fn command_exists(command: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(command).is_file()))
+        .unwrap_or(false)
+}
+
+fn download_and_open_installer(
+    update: AvailableUpdate,
+) -> Result<OpenedInstaller, UpdateInstallError> {
+    let result = download_and_open_installer_inner(&update);
+    result.map_err(|message| UpdateInstallError {
+        update: Box::new(update),
+        message,
+    })
+}
+
+fn download_and_open_installer_inner(update: &AvailableUpdate) -> Result<OpenedInstaller, String> {
+    let installer = update
+        .installer
+        .as_ref()
+        .ok_or_else(|| t!("update_installer_missing").to_string())?;
+    let path = download_update_asset(update, installer)?;
+    open_installer_file(&path)?;
+    Ok(OpenedInstaller {
+        update: update.clone(),
+        path,
+    })
+}
+
+fn download_update_asset(update: &AvailableUpdate, asset: &UpdateAsset) -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir()
+        .join("morn-updates")
+        .join(sanitize_file_name(&update.tag_name));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = available_download_path(&dir, &sanitize_file_name(&asset.name));
+    let partial = path.with_file_name(format!(
+        "{}.part",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("morn-update")
+    ));
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(120))
+        .build();
+    let mut reader = agent
+        .get(&asset.download_url)
+        .set("User-Agent", "Morn update downloader")
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_reader();
+    let mut file = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
+    std::io::copy(&mut reader, &mut file).map_err(|e| e.to_string())?;
+    drop(file);
+    std::fs::rename(&partial, &path).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+fn sanitize_file_name(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect();
+    let sanitized = sanitized.trim_matches(['.', ' ']);
+    if sanitized.is_empty() {
+        "morn-update".to_string()
+    } else {
+        sanitized.to_string()
+    }
+}
+
+fn available_download_path(dir: &Path, file_name: &str) -> PathBuf {
+    let candidate = dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("morn-update");
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    for index in 1..1000 {
+        let name = match extension {
+            Some(extension) => format!("{stem}-{index}.{extension}"),
+            None => format!("{stem}-{index}"),
+        };
+        let candidate = dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{stem}-latest"))
+}
+
+#[cfg(target_os = "windows")]
+fn open_installer_file(path: &Path) -> Result<(), String> {
+    std::process::Command::new("cmd")
+        .args(["/C", "start", ""])
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn open_installer_file(path: &Path) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn open_installer_file(path: &Path) -> Result<(), String> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("appimage"))
+    {
+        make_executable(path)?;
+        return std::process::Command::new(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+    }
+    std::process::Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn make_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = std::fs::metadata(path)
+        .map_err(|e| e.to_string())?
+        .permissions();
+    permissions.set_mode(permissions.mode() | 0o755);
+    std::fs::set_permissions(path, permissions).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -294,6 +603,14 @@ mod tests {
             html_url: format!("https://example.test/releases/{tag_name}"),
             prerelease,
             draft: false,
+            assets: Vec::new(),
+        }
+    }
+
+    fn asset(name: &str) -> GithubAsset {
+        GithubAsset {
+            name: name.to_string(),
+            browser_download_url: format!("https://example.test/downloads/{name}"),
         }
     }
 
@@ -322,6 +639,78 @@ mod tests {
         let releases = vec![release("v0.1.0", false), release("v0.0.9", false)];
 
         assert!(select_latest_update("0.1.0", true, &releases).is_none());
+    }
+
+    #[test]
+    fn release_assets_match_current_platform_suffixes() {
+        assert_eq!(target_asset_suffix("macos", "aarch64"), Some("macos-arm64"));
+        assert_eq!(
+            target_asset_suffix("windows", "x86_64"),
+            Some("windows-x86_64")
+        );
+        assert_eq!(target_asset_suffix("linux", "aarch64"), Some("linux-arm64"));
+        assert_eq!(target_asset_suffix("linux", "arm"), None);
+    }
+
+    #[test]
+    fn windows_asset_selection_prefers_exe_installer() {
+        let assets = vec![
+            asset("morn-v0.2.0-windows-x86_64.msi"),
+            asset("morn-v0.2.0-windows-x86_64.exe"),
+        ];
+
+        let selected = release_asset_for_target(
+            &assets,
+            "windows",
+            "x86_64",
+            LinuxPackagePreference::AppImage,
+        )
+        .expect("expected windows asset");
+
+        assert_eq!(selected.name, "morn-v0.2.0-windows-x86_64.exe");
+    }
+
+    #[test]
+    fn linux_asset_selection_follows_package_preference() {
+        let assets = vec![
+            asset("morn-v0.2.0-linux-x86_64.AppImage"),
+            asset("morn-v0.2.0-linux-x86_64.deb"),
+            asset("morn-v0.2.0-linux-x86_64.rpm"),
+        ];
+
+        let deb = release_asset_for_target(&assets, "linux", "x86_64", LinuxPackagePreference::Deb)
+            .expect("expected deb asset");
+        let rpm = release_asset_for_target(&assets, "linux", "x86_64", LinuxPackagePreference::Rpm)
+            .expect("expected rpm asset");
+
+        assert_eq!(deb.name, "morn-v0.2.0-linux-x86_64.deb");
+        assert_eq!(rpm.name, "morn-v0.2.0-linux-x86_64.rpm");
+    }
+
+    #[test]
+    fn selected_update_includes_matching_installer_asset() {
+        let mut newer = release("v0.2.0", false);
+        newer.assets = vec![
+            asset("morn-v0.2.0-macos-arm64.dmg"),
+            asset("morn-v0.2.0-windows-x86_64.exe"),
+        ];
+
+        let update = require_update(select_latest_update("0.1.0", false, &[newer]));
+
+        if let Some(suffix) = target_asset_suffix(std::env::consts::OS, std::env::consts::ARCH) {
+            if suffix == "macos-arm64" || suffix == "windows-x86_64" {
+                assert!(update.installer.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn downloaded_asset_names_are_sanitized() {
+        assert_eq!(
+            sanitize_file_name("../morn:v0.2.0?.dmg"),
+            "_morn_v0.2.0_.dmg"
+        );
+        assert_eq!(sanitize_file_name("..."), "morn-update");
     }
 
     #[test]

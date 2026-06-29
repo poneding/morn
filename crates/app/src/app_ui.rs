@@ -469,7 +469,7 @@ impl PlayerApp {
     }
 
     fn request_update_check_repaint(&self, ctx: &egui::Context) {
-        if self.update_check.is_checking() {
+        if self.update_check.is_busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }

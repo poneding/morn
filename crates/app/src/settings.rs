@@ -443,7 +443,7 @@ fn updates_section(
     if player.prefs().check_updates_on_startup {
         beta_update_check_row(ui, player);
     }
-    update_status(ui, update_check.status());
+    update_status(ui, update_check);
 }
 
 fn update_action_row(
@@ -474,7 +474,7 @@ fn update_header_actions(
     // that background state visible in the UI.
     if ui
         .add_enabled(
-            !update_check.is_checking(),
+            !update_check.is_busy(),
             egui::Button::new(crate::symbols::REFRESH)
                 .min_size(egui::vec2(SETTINGS_ROW_HEIGHT, SETTINGS_ROW_HEIGHT)),
         )
@@ -517,11 +517,16 @@ fn subtitle_section(ui: &mut egui::Ui, player: &mut Player) {
     });
 }
 
-fn update_status(ui: &mut egui::Ui, status: &crate::updater::UpdateStatus) {
-    ui.horizontal_wrapped(|ui| update_status_contents(ui, status));
+fn update_status(ui: &mut egui::Ui, update_check: &mut crate::updater::UpdateChecker) {
+    let status = update_check.status().clone();
+    ui.horizontal_wrapped(|ui| update_status_contents(ui, update_check, &status));
 }
 
-fn update_status_contents(ui: &mut egui::Ui, status: &crate::updater::UpdateStatus) {
+fn update_status_contents(
+    ui: &mut egui::Ui,
+    update_check: &mut crate::updater::UpdateChecker,
+    status: &crate::updater::UpdateStatus,
+) {
     // Status text is rendered in a wrapped row because release URLs and localized
     // failure messages can be wider than the fixed settings panel.
     match status {
@@ -547,11 +552,54 @@ fn update_status_contents(ui: &mut egui::Ui, status: &crate::updater::UpdateStat
                 update.version,
                 channel
             ));
+            install_update_button(ui, update_check, update);
+            ui.hyperlink_to(t!("open_release_page").to_string(), &update.html_url);
+        }
+        crate::updater::UpdateStatus::DownloadingInstaller(update) => {
+            ui.add(egui::Spinner::new());
+            ui.label(format!("{}: {}", t!("downloading_update"), update.version));
+        }
+        crate::updater::UpdateStatus::InstallerOpened(opened) => {
+            ui.label(format!(
+                "{}: {}",
+                t!("update_installer_opened"),
+                opened.update.version
+            ));
+            ui.hyperlink_to(t!("open_release_page").to_string(), &opened.update.html_url);
+        }
+        crate::updater::UpdateStatus::InstallError { update, message } => {
+            ui.label(format!("{}: {message}", t!("update_install_failed")));
+            install_update_button(ui, update_check, update);
             ui.hyperlink_to(t!("open_release_page").to_string(), &update.html_url);
         }
         crate::updater::UpdateStatus::Error(err) => {
             ui.label(format!("{}: {err}", t!("update_check_failed")));
         }
+    }
+}
+
+fn install_update_button(
+    ui: &mut egui::Ui,
+    update_check: &mut crate::updater::UpdateChecker,
+    update: &crate::updater::AvailableUpdate,
+) {
+    let has_installer = update.installer.is_some();
+    let response = ui
+        .add_enabled(
+            has_installer && !update_check.is_busy(),
+            egui::Button::new(crate::symbols::DOWNLOAD)
+                .min_size(egui::vec2(SETTINGS_ROW_HEIGHT, SETTINGS_ROW_HEIGHT)),
+        )
+        .on_hover_text(
+            if has_installer {
+                t!("install_update")
+            } else {
+                t!("update_installer_missing")
+            }
+            .to_string(),
+        );
+    if response.clicked() {
+        update_check.begin_install(update.clone());
     }
 }
 
@@ -658,8 +706,10 @@ mod tests {
         assert!(source.contains("Button::new(crate::symbols::REFRESH)"));
         assert!(source.contains("on_hover_text(t!(\"check_now\").to_string())"));
         assert!(source.contains("update_check.begin(player.prefs().check_beta_updates)"));
-        assert!(source.contains("update_status(ui, update_check.status())"));
+        assert!(source.contains("update_status(ui, update_check)"));
         assert!(source.contains("current_version"));
+        assert!(source.contains("install_update_button"));
+        assert!(source.contains("update_check.begin_install(update.clone())"));
         assert!(source.contains("open_release_page"));
     }
 
