@@ -138,8 +138,8 @@ impl eframe::App for PlayerApp {
         self.sync_runtime_preferences(&ctx);
         self.handle_dropped_files(&ctx);
 
-        // 窗口正在缩放(含全屏切换动画): 跳过播放推进与纹理绘制, 让 TopLeft
-        // 锚定的旧帧保持不动, 避免每帧重复 fit+upload 造成的弹动拉伸。
+        // 窗口正在缩放(含全屏切换动画): 暂停 tick 降低推进压力, 但仍然
+        // present/paint 当前帧, 避免非 macOS 平台在缩放期间露出空白视频面。
         let now = std::time::Instant::now();
         let resizing = should_request_window_resize_repaint(self.last_window_resize, now);
 
@@ -199,7 +199,7 @@ impl PlayerApp {
             self.player.timeline().state,
             self.player.seek_pending(),
             self.player.video().is_some(),
-            self.video_view.has_texture(),
+            self.video_view.has_current_frame_texture(&self.player),
         ) {
             ctx.request_repaint_after(OCCLUDED_VIDEO_PRESENTATION_REPAINT_INTERVAL);
         }
@@ -505,7 +505,7 @@ impl PlayerApp {
             self.player.timeline().state,
             self.player.seek_pending(),
             self.player.video().is_some(),
-            self.video_view.has_texture(),
+            self.video_view.has_current_frame_texture(&self.player),
         ) {
             ctx.request_repaint();
         }

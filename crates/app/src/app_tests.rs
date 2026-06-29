@@ -774,7 +774,7 @@ fn restored_paused_media_repaints_until_first_frame_arrives() {
         .next()
         .unwrap();
 
-    assert!(repaint_call.contains("self.video_view.has_texture()"));
+    assert!(repaint_call.contains("self.video_view.has_current_frame_texture(&self.player)"));
     assert!(!repaint_call.contains("self.player.current_frame_rgba().is_some()"));
 
     assert!(super::player_should_request_repaint(

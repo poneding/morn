@@ -177,36 +177,24 @@ impl VideoView {
         }
     }
 
-    pub fn has_texture(&self) -> bool {
-        self.tex_id.is_some()
+    pub fn has_current_frame_texture(&self, player: &Player) -> bool {
+        self.texture_matches_current_frame(player)
     }
 
     /// 每帧调用: 取引擎按主时钟选出的当前帧并绘制。`present_frame` 返回 None 表示
     /// 画面无变化(沿用上一帧纹理)——暂停/未到点/队列暂空都走这条, 不重复上传。
     ///
-    /// `resizing` 时跳过纹理上传与绘制: 播放时钟已在 prepare_ui_frame 暂停,
-    /// 此时只分配面板区域而不绘制视频, 让 TopLeft 锚定的旧帧在动画期间保持不动,
-    /// 避免每帧重新 fit+upload 造成的弹动拉伸。动画结束后一次性 fit 到正确尺寸。
+    /// Resize/fullscreen transitions still present and paint the current frame so
+    /// playback never runs behind a blank surface on platforms without macOS'
+    /// TopLeft layer placement masking.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         frame: &mut eframe::Frame,
         player: &mut Player,
-        resizing: bool,
+        _resizing: bool,
     ) -> Vec<Command> {
         let mut commands = Vec::new();
-
-        if resizing {
-            // 缩放进行中: 不推进帧、不上传纹理、也不绘制视频, 旧帧挂左上角不动。
-            let texture_current = false;
-            let _subtitle_rect = self.show_video_content(
-                ui,
-                player.video().is_some(),
-                texture_current,
-                &mut commands,
-            );
-            return commands;
-        }
 
         let uploaded_new_frame = self.upload_presented_frame(frame, player);
         self.upload_cached_frame_if_needed(frame, player, uploaded_new_frame);
@@ -426,8 +414,17 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .unwrap();
+        let show_source = source
+            .split("pub fn show")
+            .nth(1)
+            .unwrap()
+            .split("fn texture_matches_current_frame")
+            .next()
+            .unwrap();
 
         assert!(source.contains("player.present_frame()"));
+        assert!(show_source.contains("self.upload_presented_frame(frame, player)"));
+        assert!(!show_source.contains("if resizing"));
         assert!(source.contains("upload_cached_frame_if_needed"));
         assert!(source.contains("texture_matches_current_frame"));
         assert!(
