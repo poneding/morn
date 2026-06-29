@@ -478,12 +478,7 @@ impl PlayerApp {
             .handle(player_core::Command::OpenFiles(vec![path]));
     }
 
-    fn show_video_panel(
-        &mut self,
-        ui: &mut egui::Ui,
-        frame: &mut eframe::Frame,
-        resizing: bool,
-    ) {
+    fn show_video_panel(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame, resizing: bool) {
         let mut video_commands = Vec::new();
         let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
         egui::CentralPanel::no_frame().show_inside(ui, |ui| {
