@@ -132,7 +132,7 @@ impl ArrowHoldPlayback {
         current_rate_pct: u16,
     ) -> ArrowHoldAction {
         let held_key = input.held_key();
-        let action = match (self.key, held_key) {
+        match (self.key, held_key) {
             (Some(key), Some(held_key)) if key == held_key => {
                 self.update_held_key(input, now, current_rate_pct)
             }
@@ -143,9 +143,7 @@ impl ArrowHoldPlayback {
                 ArrowHoldAction::None
             }
             _ => ArrowHoldAction::None,
-        };
-
-        action
+        }
     }
 
     fn update_held_key(
@@ -373,7 +371,7 @@ impl PlayerApp {
     fn current_playlist_path(&self) -> Option<std::path::PathBuf> {
         self.player
             .current_index()
-            .and_then(|i| self.player.playlist_paths().iter().nth(i).cloned())
+            .and_then(|i| self.player.playlist_paths().get(i).cloned())
     }
 
     fn handle_command(&mut self, cmd: player_core::Command) -> bool {

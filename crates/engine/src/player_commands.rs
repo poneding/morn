@@ -171,7 +171,7 @@ impl Player {
         let selected = self
             .playlist
             .append_or_select_many(items)
-            .and_then(|index| self.playlist.as_slice().iter().nth(index).cloned());
+            .and_then(|index| self.playlist.as_slice().get(index).cloned());
         if let Some(selected) = selected {
             self.open_path_and_save(&selected);
         }

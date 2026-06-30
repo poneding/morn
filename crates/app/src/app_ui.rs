@@ -221,9 +221,7 @@ impl PlayerApp {
     }
 
     fn show_titlebar(&mut self, ctx: &egui::Context, state: &mut UiFrameState) {
-        let title = self
-            .current_playlist_name()
-            .unwrap_or_else(|| String::new());
+        let title = self.current_playlist_name().unwrap_or_default();
         let actions = crate::titlebar::show_custom_titlebar(
             ctx,
             &title,

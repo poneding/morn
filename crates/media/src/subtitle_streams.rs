@@ -115,10 +115,7 @@ fn cue_from_subtitle_packet(
 }
 
 fn packet_start_ms(packet: &ff::codec::packet::Packet, time_base: f64) -> u64 {
-    let pts = match packet.pts() {
-        Some(pts) => pts,
-        None => 0,
-    };
+    let pts = packet.pts().unwrap_or_default();
     timestamp_ms(pts, time_base)
 }
 

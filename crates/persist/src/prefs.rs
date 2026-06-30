@@ -131,7 +131,7 @@ impl Preferences {
     }
 
     pub fn resume_point(&self, file: &str) -> Option<u64> {
-        return self.resume_points.get(file).copied();
+        self.resume_points.get(file).copied()
     }
 
     pub fn set_resume_point(&mut self, file: &str, ms: u64) {
@@ -192,7 +192,7 @@ fn replace_file(tmp: &Path, path: &Path) -> std::io::Result<()> {
     if path.exists() {
         std::fs::remove_file(path)?;
     }
-    return std::fs::rename(tmp, path);
+    std::fs::rename(tmp, path)
 }
 
 #[cfg(test)]

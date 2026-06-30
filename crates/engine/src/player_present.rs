@@ -66,11 +66,7 @@ impl Player {
 
         let mut changed = false;
         let mut drops = 0u32;
-        loop {
-            let frame = match self.next_present_candidate() {
-                Some(frame) => frame,
-                None => break,
-            };
+        while let Some(frame) = self.next_present_candidate() {
             match self.present_candidate_action(now, frame.pts_ms, drops) {
                 sync::AdvanceAction::Show => {
                     self.show_present_frame(frame);
@@ -88,7 +84,7 @@ impl Player {
         }
         self.present_drops = self.present_drops.saturating_add(drops);
         self.debug_log(now);
-        changed.then(|| self.current_frame.as_ref()).flatten()
+        changed.then_some(self.current_frame.as_ref()).flatten()
     }
 
     fn next_present_candidate(&mut self) -> Option<media::VideoFrame> {

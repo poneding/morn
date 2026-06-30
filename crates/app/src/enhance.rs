@@ -87,7 +87,7 @@ fn rate_popup(rate_response: &egui::Response, rate_pct: u16, commands: &mut Vec<
                     .clicked()
                 {
                     commands.push(Command::SetRate(pct));
-                    let _closed = ui.close();
+                    ui.close();
                 }
             }
         });

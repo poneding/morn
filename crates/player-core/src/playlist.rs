@@ -73,7 +73,7 @@ impl Playlist {
     }
 
     pub fn current(&self) -> Option<&PathBuf> {
-        return self.items.get(self.cursor);
+        self.items.get(self.cursor)
     }
 
     pub fn iter(&self) -> std::slice::Iter<'_, std::path::PathBuf> {

@@ -120,7 +120,7 @@ fn startup_window_size() -> [f32; 2] {
 fn restored_selected_video_path(prefs_path: PathBuf) -> Option<PathBuf> {
     let player = engine::Player::with_prefs(prefs_path);
     let index = player.current_index()?;
-    return player.playlist_paths().get(index).cloned();
+    player.playlist_paths().get(index).cloned()
 }
 
 fn selected_video_dimensions(path: &Path) -> Option<(u32, u32)> {

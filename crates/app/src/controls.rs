@@ -26,6 +26,7 @@ const VOLUME_POPUP_SLIDER_WIDTH: f32 = 24.0;
 const VOLUME_POPUP_CONTENT_WIDTH: f32 = 40.0;
 const VOLUME_POPUP_INNER_MARGIN_X: i8 = 10;
 const VOLUME_POPUP_INNER_MARGIN_Y: i8 = 8;
+const _: () = assert!(VOLUME_POPUP_CONTENT_WIDTH >= VOLUME_POPUP_SLIDER_WIDTH);
 
 pub struct ControlsBarInput<'a> {
     // Bundle frame-local control data so the call site cannot accidentally pass
@@ -183,7 +184,6 @@ fn volume_popup(
                 .size()
                 .x;
             debug_assert!(VOLUME_POPUP_CONTENT_WIDTH >= value_width);
-            debug_assert!(VOLUME_POPUP_CONTENT_WIDTH >= VOLUME_POPUP_SLIDER_WIDTH);
             ui.set_width(VOLUME_POPUP_CONTENT_WIDTH);
 
             let mut vol = f32::from(volume);

@@ -76,10 +76,10 @@ impl Player {
         let Some(handle) = &self.audio_out else {
             return;
         };
-        if !self
+        if self
             .audio_join
             .as_ref()
-            .is_some_and(|join| !join.is_finished())
+            .is_none_or(|join| join.is_finished())
         {
             return;
         }

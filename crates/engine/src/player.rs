@@ -470,7 +470,11 @@ const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "m4v", "flv", 
 fn is_video_ext(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| VIDEO_EXTS.contains(&e.to_lowercase().as_str()))
+        .map(|e| {
+            VIDEO_EXTS
+                .iter()
+                .any(|candidate| e.eq_ignore_ascii_case(candidate))
+        })
         .unwrap_or(false)
 }
 

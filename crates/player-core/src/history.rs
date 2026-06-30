@@ -14,7 +14,7 @@ pub fn push_history(history: &mut Vec<String>, path: &str, cap: usize) {
 
 pub fn remove_history_index(history: &mut Vec<String>, index: usize) -> Option<String> {
     if index < history.len() {
-        return Some(history.remove(index));
+        Some(history.remove(index))
     } else {
         None
     }

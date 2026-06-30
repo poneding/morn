@@ -381,15 +381,15 @@ fn playlist_row_context_menu(
     let path = path.to_path_buf();
     if ui.button(t!("reveal_file").to_string()).clicked() {
         selected.push(Command::RevealFile(path.clone()));
-        let _closed = ui.close();
+        ui.close();
     }
     if ui.button(t!("open_sibling_videos").to_string()).clicked() {
         selected.push(Command::OpenSiblingVideos(path.clone()));
-        let _closed = ui.close();
+        ui.close();
     }
     if ui.button(t!("delete_file").to_string()).clicked() {
         selected.push(delete_cmd.clone());
-        let _closed = ui.close();
+        ui.close();
     }
     selected
 }

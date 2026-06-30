@@ -76,8 +76,7 @@ impl PlayerApp {
         let removed_name = self
             .player
             .playlist_paths()
-            .iter()
-            .nth(candidate)
+            .get(candidate)
             .map(path_file_name);
         self.handle_command(player_core::Command::RemovePlaylistIndex(candidate));
         self.playlist_candidate = candidate_after_remove(Some(candidate), playlist_len);
@@ -156,7 +155,6 @@ fn move_sidebar_candidate(candidate: &mut Option<usize>, len: usize, frame: Shor
 
 fn history_candidate_name(history: &[String], candidate: usize) -> Option<String> {
     history
-        .iter()
-        .nth(candidate)
+        .get(candidate)
         .map(|path| path_file_name(std::path::Path::new(path)))
 }
