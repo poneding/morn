@@ -20,6 +20,7 @@ const TITLEBAR_TRAILING_MARGIN: f32 = 4.0;
 /// 标题栏这个 UI 元素的底部位置。浮层与顶部 Title 的视觉间距应从这里开始算,
 /// 而不是从窗口顶部边框开始算。
 pub const TITLEBAR_BOTTOM_OFFSET: f32 = TITLEBAR_HEIGHT + (TITLEBAR_INNER_MARGIN_Y as f32) * 2.0;
+#[cfg(not(target_os = "macos"))]
 const WINDOW_CORNER_RADIUS: u8 = crate::visuals::PANEL_CORNER_RADIUS;
 #[cfg(not(target_os = "macos"))]
 const WINDOW_RESIZE_HANDLE: f32 = 6.0;
@@ -165,15 +166,11 @@ pub fn show_custom_titlebar(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             ui.set_width(screen_rect.width());
+            // 标题栏 Frame 不画自己的 fill 背景: 窗口圆角填充已由 paint_window_background
+            // 统一负责(整窗 panel_fill + 四角圆角 + 整圈描边)。若 Frame 再叠一层不透明 fill,
+            // 其 ne 圆角在渲染时可能未完美对齐 background 的圆角缺角, 把右上角圆角缺角填成
+            // 直角灰色。Frame 透明即消除该覆盖, 四角圆角完全由 background 单层保证。
             egui::Frame::NONE
-                .fill(titlebar_fill(ui))
-                // 标题栏上方两个圆角与窗口一致，下方两个是直角
-                .corner_radius(egui::CornerRadius {
-                    nw: WINDOW_CORNER_RADIUS,
-                    ne: WINDOW_CORNER_RADIUS,
-                    sw: 0,
-                    se: 0,
-                })
                 .inner_margin(egui::Margin::symmetric(
                     TITLEBAR_INNER_MARGIN_X,
                     TITLEBAR_INNER_MARGIN_Y,
@@ -216,10 +213,6 @@ fn titlebar_opacity(ctx: &egui::Context, screen_rect: egui::Rect) -> f32 {
             TITLEBAR_FADE_TIME,
         )
     }
-}
-
-fn titlebar_fill(ui: &egui::Ui) -> egui::Color32 {
-    ui.visuals().window_fill.to_opaque()
 }
 
 fn titlebar_contents(
@@ -378,30 +371,31 @@ fn window_control_button(
         egui::Sense::click_and_drag(),
     );
     let hovered = response.hovered() || response.is_pointer_button_down_on();
+    let close_hover = matches!(accent, WindowButtonAccent::Close) && hovered && !active;
+
+    // 关闭按钮 hover 时用红色 frame, 其余情况复用与其他标题栏按钮完全一致的
+    // beveled frame(同尺寸/同圆角5/同底部高光), 避免"更大、圆角更小"的视觉差异。
+    if close_hover {
+        paint_close_hover_frame(ui, rect, &response, opacity);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            egui::FontId::proportional(14.0),
+            egui::Color32::WHITE.gamma_multiply(opacity),
+        );
+        return response;
+    }
+
+    if active || hovered {
+        crate::visuals::beveled_button_frame_at(ui, rect, &response, active, opacity);
+    }
+
     let icon_color = if active {
         ui.visuals().selection.stroke.color.gamma_multiply(opacity)
     } else {
         ui.visuals().text_color().gamma_multiply(opacity)
     };
-
-    if active || hovered {
-        crate::visuals::beveled_button_frame_at(ui, rect, &response, active, opacity);
-        // 关闭按钮 hover 时叠一层红色暖光, 对齐 Windows 标题栏关闭按钮的视觉惯例。
-        if matches!(accent, WindowButtonAccent::Close) && hovered && !active {
-            let close_fill = egui::Color32::from_rgb(196, 43, 28).gamma_multiply(opacity);
-            ui.painter().rect_filled(rect.shrink(0.5), 2, close_fill);
-            // 关闭图标在红底上改用白色, 保证对比度。
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                icon,
-                egui::FontId::proportional(14.0),
-                egui::Color32::WHITE.gamma_multiply(opacity),
-            );
-            return response;
-        }
-    }
-
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -410,6 +404,47 @@ fn window_control_button(
         icon_color,
     );
     response
+}
+
+/// 关闭按钮 hover 时的红色 frame: 与 `beveled_button_frame_at` 几何完全一致
+/// (同 rect.shrink(0.5)、同 CONTROL_CORNER_RADIUS 圆角、同底部高光线), 仅颜色改红,
+/// 保证关闭按钮 hover 时尺寸/圆角与其他按钮一致, 只是配色不同。
+#[cfg(not(target_os = "macos"))]
+fn paint_close_hover_frame(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    response: &egui::Response,
+    opacity: f32,
+) {
+    use crate::visuals::{BEVEL_SHADOW_ALPHA, CONTROL_CORNER_RADIUS};
+    let frame_rect = rect.shrink(0.5);
+    let radius = egui::CornerRadius::same(CONTROL_CORNER_RADIUS);
+    let fill = egui::Color32::from_rgb(196, 43, 28).gamma_multiply(opacity);
+    ui.painter().rect_filled(frame_rect, radius, fill);
+    ui.painter().rect_stroke(
+        frame_rect,
+        radius,
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgb(140, 30, 20).gamma_multiply(opacity),
+        ),
+        egui::StrokeKind::Inside,
+    );
+    // 与 beveled_button_frame_at 一致的底部阴影线, 保持立体感统一。
+    let pressed = response.is_pointer_button_down_on();
+    let bottom_color = egui::Color32::from_black_alpha(if pressed {
+        BEVEL_SHADOW_ALPHA / 2
+    } else {
+        BEVEL_SHADOW_ALPHA
+    })
+    .gamma_multiply(opacity);
+    ui.painter().line_segment(
+        [
+            egui::pos2(frame_rect.left() + 1.5, frame_rect.bottom() - 1.0),
+            egui::pos2(frame_rect.right() - 1.5, frame_rect.bottom() - 1.0),
+        ],
+        egui::Stroke::new(1.0, bottom_color),
+    );
 }
 
 fn titlebar_icon_button(
@@ -510,6 +545,47 @@ mod tests {
         // 标题栏布局为窗口按钮预留宽度。
         assert!(source.contains("fn window_buttons_width("));
         assert!(source.contains("TITLEBAR_BUTTON_SIZE * 3.0"));
+        // 关闭按钮 hover 用独立的 paint_close_hover_frame, 与其他按钮同圆角(CONTROL_CORNER_RADIUS),
+        // 不再叠半径2的额外红色层。
+        assert!(source.contains("fn paint_close_hover_frame"));
+        assert!(source.contains("CONTROL_CORNER_RADIUS"));
+        assert!(!source.contains("rect_filled(rect.shrink(0.5), 2,"));
+    }
+
+    #[test]
+    fn window_minimize_icon_uses_short_en_dash() {
+        // 最小化用 en dash(短横杠 –) 而非 em dash(—), 视觉更紧凑。
+        assert_eq!(crate::symbols::WINDOW_MINIMIZE, "–");
+        assert_ne!(crate::symbols::WINDOW_MINIMIZE, "—");
+    }
+
+    #[test]
+    fn titlebar_frame_is_transparent_to_let_window_background_own_corners() {
+        let source = include_str!("titlebar.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        // 标题栏 Frame 不再画自己的 fill 背景: 四角圆角统一由 paint_window_background
+        // 单层负责, 避免 Frame 不透明 fill 的 ne 圆角与 background 圆角缺角错位、把右上角
+        // 填成直角。标题栏 Frame 应只剩 inner_margin, 无 fill/corner_radius。
+        assert!(!source.contains("fn titlebar_fill"));
+        assert!(!source.contains(".fill(titlebar_fill"));
+        let titlebar_area_block = source
+            .split("egui::Area::new(egui::Id::new(\"custom_titlebar\"))")
+            .nth(1)
+            .unwrap()
+            .split("titlebar_contents")
+            .next()
+            .unwrap();
+        assert!(
+            !titlebar_area_block.contains(".fill("),
+            "标题栏 Frame 不应再设 fill"
+        );
+        assert!(
+            !titlebar_area_block.contains("corner_radius"),
+            "标题栏 Frame 不应再设 corner_radius"
+        );
     }
 
     #[test]
