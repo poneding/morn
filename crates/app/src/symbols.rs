@@ -18,3 +18,15 @@ pub const REFRESH: &str = "↻";
 pub const DOWNLOAD: &str = "⇩";
 pub const PLAYLIST: &str = "☰";
 pub const SETTINGS: &str = "⚙";
+
+// 窗口控制符号: 非 macOS 无边框窗口下自绘的最小化/最大化/还原/关闭按钮。
+// 用通用 Unicode 几何符号, 跨平台一致渲染。
+// 仅非 macOS 引用, macOS 走原生交通灯, 故 allow 死代码告警。
+#[allow(dead_code)]
+pub const WINDOW_MINIMIZE: &str = "—";
+#[allow(dead_code)]
+pub const WINDOW_MAXIMIZE: &str = "▢";
+#[allow(dead_code)]
+pub const WINDOW_RESTORE: &str = "❐";
+#[allow(dead_code)]
+pub const WINDOW_CLOSE: &str = "✕";

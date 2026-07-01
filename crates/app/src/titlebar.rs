@@ -30,6 +30,11 @@ pub struct TitlebarActions {
     // the overlay is being painted.
     pub toggle_playlist: bool,
     pub toggle_settings: bool,
+    // 非 macOS 无边框窗口下自绘的窗口控制按钮触发的意图, 由 app 转发为
+    // ViewportCommand。macOS 走原生交通灯, 这三个字段恒为 false。
+    pub minimize: bool,
+    pub maximize: bool,
+    pub close: bool,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -239,11 +244,30 @@ fn titlebar_contents(
         }
 
         // App actions live on the right; the rest of the strip is the drag region.
-        let buttons_width = titlebar_app_buttons_width(ui);
+        let buttons_width = total_trailing_buttons_width(ui);
         let drag_width = (ui.available_width() - buttons_width).max(0.0);
         drag_region(ui, title, drag_width, opacity);
         titlebar_app_buttons(ui, show_playlist, show_settings, opacity, actions);
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            window_buttons(ui, opacity, actions);
+        }
     });
+}
+
+/// 标题栏右侧所有按钮的总宽度, 用于为拖拽区域预留空间。
+/// macOS 仅 app 按钮; 其它平台额外加上窗口控制按钮。
+fn total_trailing_buttons_width(ui: &egui::Ui) -> f32 {
+    let app_width = titlebar_app_buttons_width(ui);
+    #[cfg(not(target_os = "macos"))]
+    {
+        app_width + window_buttons_width(ui)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        app_width
+    }
 }
 
 fn toggle_maximized(ctx: &egui::Context) {
@@ -283,6 +307,109 @@ fn titlebar_app_buttons(
     }
 
     ui.add_space(TITLEBAR_TRAILING_MARGIN);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn window_buttons_width(ui: &egui::Ui) -> f32 {
+    // 最小化 + 最大化 + 关闭三个按钮, 复用与 app 按钮相同的方形尺寸与间距。
+    TITLEBAR_BUTTON_SIZE * 3.0 + ui.spacing().item_spacing.x * 2.0
+}
+
+#[cfg(not(target_os = "macos"))]
+fn window_buttons(ui: &mut egui::Ui, opacity: f32, actions: &mut TitlebarActions) {
+    let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+
+    let minimize = window_control_button(
+        ui,
+        crate::symbols::WINDOW_MINIMIZE,
+        false,
+        WindowButtonAccent::Normal,
+        opacity,
+    );
+    if minimize.clicked() {
+        actions.minimize = true;
+    }
+
+    let maximize_icon = if maximized {
+        crate::symbols::WINDOW_RESTORE
+    } else {
+        crate::symbols::WINDOW_MAXIMIZE
+    };
+    let maximize = window_control_button(
+        ui,
+        maximize_icon,
+        maximized,
+        WindowButtonAccent::Normal,
+        opacity,
+    );
+    if maximize.clicked() {
+        actions.maximize = true;
+    }
+
+    let close = window_control_button(
+        ui,
+        crate::symbols::WINDOW_CLOSE,
+        false,
+        WindowButtonAccent::Close,
+        opacity,
+    );
+    if close.clicked() {
+        actions.close = true;
+    }
+}
+
+/// 关闭按钮 hover 时的强调色, 区别于普通窗口按钮。
+#[cfg(not(target_os = "macos"))]
+enum WindowButtonAccent {
+    Normal,
+    Close,
+}
+
+#[cfg(not(target_os = "macos"))]
+fn window_control_button(
+    ui: &mut egui::Ui,
+    icon: &'static str,
+    active: bool,
+    accent: WindowButtonAccent,
+    opacity: f32,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(TITLEBAR_BUTTON_SIZE, TITLEBAR_BUTTON_SIZE),
+        egui::Sense::click_and_drag(),
+    );
+    let hovered = response.hovered() || response.is_pointer_button_down_on();
+    let icon_color = if active {
+        ui.visuals().selection.stroke.color.gamma_multiply(opacity)
+    } else {
+        ui.visuals().text_color().gamma_multiply(opacity)
+    };
+
+    if active || hovered {
+        crate::visuals::beveled_button_frame_at(ui, rect, &response, active, opacity);
+        // 关闭按钮 hover 时叠一层红色暖光, 对齐 Windows 标题栏关闭按钮的视觉惯例。
+        if matches!(accent, WindowButtonAccent::Close) && hovered && !active {
+            let close_fill = egui::Color32::from_rgb(196, 43, 28).gamma_multiply(opacity);
+            ui.painter().rect_filled(rect.shrink(0.5), 2, close_fill);
+            // 关闭图标在红底上改用白色, 保证对比度。
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                icon,
+                egui::FontId::proportional(14.0),
+                egui::Color32::WHITE.gamma_multiply(opacity),
+            );
+            return response;
+        }
+    }
+
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(14.0),
+        icon_color,
+    );
+    response
 }
 
 fn titlebar_icon_button(
@@ -355,6 +482,34 @@ mod tests {
         // Non-macOS custom titlebar still owns background and resize handles.
         assert!(source.contains("show_resize_handles"));
         assert!(source.contains("paint_window_background"));
+    }
+
+    #[test]
+    fn titlebar_renders_window_control_buttons_on_non_macos() {
+        let source = include_str!("titlebar.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        // 最小化/最大化/关闭三个窗口控制按钮仅非 macOS 渲染。
+        assert!(source.contains("fn window_buttons("));
+        assert!(source.contains("fn window_control_button("));
+        assert!(source.contains("crate::symbols::WINDOW_MINIMIZE"));
+        assert!(source.contains("crate::symbols::WINDOW_MAXIMIZE"));
+        assert!(source.contains("crate::symbols::WINDOW_RESTORE"));
+        assert!(source.contains("crate::symbols::WINDOW_CLOSE"));
+        // 最大化按钮按当前 maximized 状态在 ▢/❐ 之间切换。
+        assert!(source.contains("i.viewport().maximized.unwrap_or(false)"));
+        // TitlebarActions 暴露三个窗口控制意图。
+        assert!(source.contains("pub minimize: bool"));
+        assert!(source.contains("pub maximize: bool"));
+        assert!(source.contains("pub close: bool"));
+        // 关闭按钮 hover 红色高亮。
+        assert!(source.contains("WindowButtonAccent::Close"));
+        assert!(source.contains("196, 43, 28"));
+        // 标题栏布局为窗口按钮预留宽度。
+        assert!(source.contains("fn window_buttons_width("));
+        assert!(source.contains("TITLEBAR_BUTTON_SIZE * 3.0"));
     }
 
     #[test]
