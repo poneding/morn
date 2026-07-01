@@ -234,6 +234,16 @@ impl PlayerApp {
         if actions.toggle_settings {
             self.show_settings = !self.show_settings;
         }
+        if actions.minimize {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        if actions.maximize {
+            let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+        }
+        if actions.close {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     fn update_pointer_activity(&mut self, state: &mut UiFrameState) {
