@@ -12,7 +12,7 @@ const PANEL_SHADOW_OFFSET: [i8; 2] = [0, 5];
 const PANEL_SHADOW_BLUR: u8 = 18;
 const PANEL_SHADOW_ALPHA: u8 = 130;
 const BEVEL_HIGHLIGHT_ALPHA: u8 = 38;
-const BEVEL_SHADOW_ALPHA: u8 = 105;
+pub(crate) const BEVEL_SHADOW_ALPHA: u8 = 105;
 
 pub fn popup_anchor_above_floating_control_bar(response: &egui::Response) -> egui::PopupAnchor {
     let mut rect = response.interact_rect;
