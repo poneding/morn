@@ -228,8 +228,9 @@ pub struct PlayerApp {
     update_check: crate::updater::UpdateChecker,
     last_window_resized_video_path: Option<std::path::PathBuf>,
     arrow_hold_playback: ArrowHoldPlayback,
-    /// macOS: 标记是否已在首帧应用 resize 旧帧拉伸的掩盖(layerContentsPlacement)。
-    #[cfg(target_os = "macos")]
+    /// macOS/Windows: 标记是否已在首帧应用 resize 旧帧拉伸的掩盖
+    /// (macOS: layerContentsPlacement=TopLeft; Windows: 禁用 DWM 过渡动画)。
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     resize_glitch_mask_applied: bool,
 }
 
@@ -321,7 +322,7 @@ impl PlayerApp {
             update_check,
             last_window_resized_video_path: None,
             arrow_hold_playback: ArrowHoldPlayback::default(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             resize_glitch_mask_applied: false,
         };
         if !initial_paths.is_empty() {

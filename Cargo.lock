@@ -239,6 +239,7 @@ dependencies = [
  "sync",
  "ureq",
  "wgpu",
+ "windows-sys 0.52.0",
  "winit",
 ]
 
