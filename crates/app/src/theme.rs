@@ -156,7 +156,6 @@ impl Palette {
         w.open.fg_stroke = Stroke::new(1.0, self.text);
         w.open.corner_radius = widget_radius;
         w.open.expansion = 0.0;
-        w.open.expansion = 0.0;
 
         // 仅视觉精修、不动布局：时间轴/音量轨道收薄
         style.spacing.slider_rail_height = SLIDER_RAIL_HEIGHT;
