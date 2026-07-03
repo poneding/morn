@@ -38,6 +38,20 @@ pub struct TitlebarActions {
     pub close: bool,
 }
 
+/// 窗口是否处于"浮动"状态(非全屏、非最大化)。圆角、描边、边缘 resize handles
+/// 只在浮动窗口上有意义: 全屏/最大化时窗口铺满屏幕(或工作区)。
+#[cfg(not(target_os = "macos"))]
+fn window_is_floating(ctx: &egui::Context) -> bool {
+    let (fullscreen, maximized) = ctx.input(|i| {
+        let viewport = i.viewport();
+        (
+            viewport.fullscreen.unwrap_or(false),
+            viewport.maximized.unwrap_or(false),
+        )
+    });
+    !fullscreen && !maximized
+}
+
 #[cfg(not(target_os = "macos"))]
 fn paint_window_background(ctx: &egui::Context) {
     // Transparent native windows need an explicit rounded background; otherwise
@@ -45,6 +59,12 @@ fn paint_window_background(ctx: &egui::Context) {
     let screen_rect = ctx.content_rect();
     let visuals = &ctx.global_style().visuals;
     let painter = ctx.layer_painter(egui::LayerId::background());
+    if !window_is_floating(ctx) {
+        // 全屏/最大化: 圆角会在屏幕四角把桌面透出来, 描边贴着屏幕边缘也很突兀,
+        // 退化为直角、无描边的整幅实底。
+        painter.rect_filled(screen_rect, 0, visuals.panel_fill);
+        return;
+    }
     painter.rect_filled(screen_rect, WINDOW_CORNER_RADIUS, visuals.panel_fill);
     painter.rect_stroke(
         screen_rect.shrink(0.5),
@@ -152,8 +172,10 @@ pub fn show_custom_titlebar(
         // Paint window background with rounded corners first (for transparent window)
         paint_window_background(ctx);
 
-        // Show resize handles around the edge
-        show_resize_handles(ctx, screen_rect);
+        // 全屏/最大化窗口不可拖边缩放, 只有浮动窗口显示边缘 resize handles。
+        if window_is_floating(ctx) {
+            show_resize_handles(ctx, screen_rect);
+        }
     }
 
     let opacity = titlebar_opacity(ctx, screen_rect);
@@ -193,14 +215,17 @@ pub fn show_custom_titlebar(
 }
 
 fn titlebar_opacity(ctx: &egui::Context, screen_rect: egui::Rect) -> f32 {
+    // 全屏在所有平台一律隐藏标题栏: 全屏观影不该露出窗口栏, 退出全屏走
+    // Esc/回车快捷键。此前只有 macOS 隐藏, Windows/Linux 全屏时鼠标在窗口内
+    // 就会浮出标题栏。
+    if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+        return 0.0;
+    }
+
     #[cfg(target_os = "macos")]
     {
         let _ = screen_rect;
-        if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
-            0.0
-        } else {
-            1.0
-        }
+        1.0
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -610,6 +635,45 @@ mod tests {
         // Both action buttons share one fixed square size.
         assert!(source.contains("egui::vec2(TITLEBAR_BUTTON_SIZE, TITLEBAR_BUTTON_SIZE)"));
         assert!(source.contains("TITLEBAR_TRAILING_MARGIN"));
+    }
+
+    #[test]
+    fn fullscreen_hides_titlebar_on_all_platforms_and_squares_window_chrome() {
+        let source = include_str!("titlebar.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        // 全屏隐藏标题栏不再是 macOS 专属: titlebar_opacity 在平台分支之前
+        // 统一提前返回 0.0。
+        let opacity_source = source
+            .split("fn titlebar_opacity")
+            .nth(1)
+            .unwrap()
+            .split("fn titlebar_contents")
+            .next()
+            .unwrap();
+        let fullscreen_check = opacity_source
+            .find("i.viewport().fullscreen.unwrap_or(false)")
+            .unwrap();
+        let macos_branch = opacity_source
+            .find("#[cfg(target_os = \"macos\")]")
+            .unwrap();
+        assert!(fullscreen_check < macos_branch, "全屏检查应在平台分支之前");
+        assert!(opacity_source.contains("return 0.0"));
+
+        // 全屏/最大化: 窗口背景退化为直角无描边, 不再显示边缘 resize handles。
+        assert!(source.contains("fn window_is_floating"));
+        assert!(source.contains("if window_is_floating(ctx) {"));
+        let background_source = source
+            .split("fn paint_window_background")
+            .nth(1)
+            .unwrap()
+            .split("fn show_resize_handles")
+            .next()
+            .unwrap();
+        assert!(background_source.contains("if !window_is_floating(ctx)"));
+        assert!(background_source.contains("rect_filled(screen_rect, 0,"));
     }
 
     #[test]
