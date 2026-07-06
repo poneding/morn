@@ -214,24 +214,33 @@ pub fn show_custom_titlebar(
     actions
 }
 
-fn titlebar_opacity(ctx: &egui::Context, screen_rect: egui::Rect) -> f32 {
-    // 全屏在所有平台一律隐藏标题栏: 全屏观影不该露出窗口栏, 退出全屏走
-    // Esc/回车快捷键。此前只有 macOS 隐藏, Windows/Linux 全屏时鼠标在窗口内
-    // 就会浮出标题栏。
-    if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
-        return 0.0;
-    }
+#[cfg(not(target_os = "macos"))]
+/// 全屏时露出标题栏的顶部热区高度: 鼠标进入窗口顶部这条带才提示标题栏,
+/// 既给用户退出全屏/切播放列表的入口, 又不在观影时整条浮出遮挡画面。
+const FULLSCREEN_TITLEBAR_REVEAL_EDGE: f32 = 4.0;
 
+fn titlebar_opacity(ctx: &egui::Context, screen_rect: egui::Rect) -> f32 {
     #[cfg(target_os = "macos")]
     {
         let _ = screen_rect;
-        1.0
+        if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+            0.0
+        } else {
+            1.0
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
     {
+        let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
         let pointer_pos = ctx.input(|i| i.pointer.hover_pos());
-        let visible = pointer_pos.is_some_and(|pos| screen_rect.contains(pos));
+        let visible = if fullscreen {
+            // 全屏: 只在鼠标贴近屏幕顶部热区时才提示标题栏(像 YouTube/IINA),
+            // 移开后淡出, 不长时间遮画面。退出全屏仍可走 Esc/回车。
+            pointer_pos.is_some_and(|pos| pos.y <= FULLSCREEN_TITLEBAR_REVEAL_EDGE)
+        } else {
+            pointer_pos.is_some_and(|pos| screen_rect.contains(pos))
+        };
         ctx.animate_bool_with_time(
             egui::Id::new("custom_titlebar_opacity"),
             visible,
@@ -353,10 +362,12 @@ fn window_buttons(ui: &mut egui::Ui, opacity: f32, actions: &mut TitlebarActions
     } else {
         crate::symbols::WINDOW_MAXIMIZE
     };
+    // 最大化按钮不记录"选中"状态(它不是像 ☰/⚙ 那样的开关); 只有图标在 ▢/❐ 间
+    // 切换, 避免按下后整按钮常驻 selection 高亮色。
     let maximize = window_control_button(
         ui,
         maximize_icon,
-        maximized,
+        false,
         WindowButtonAccent::Normal,
         opacity,
     );
@@ -383,6 +394,24 @@ enum WindowButtonAccent {
     Close,
 }
 
+/// 在按钮 rect 内把单个符号字形按其 galley 包围盒精确居中。
+/// `painter.text(.., Align2::CENTER_CENTER, ..)` 是按文本行盒(baseline+advance)
+/// 对齐, 不同字形(–/▢/❐/✕)的 side bearing 各异, 视觉上会偏左/偏上。这里改成
+/// 测量 galley 后用左上角偏移定位, 让字形包围盒严格落在 rect 中心。
+#[cfg(not(target_os = "macos"))]
+fn paint_centered_symbol(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    icon: &'static str,
+    color: egui::Color32,
+) {
+    let galley =
+        ui.painter()
+            .layout_no_wrap(icon.to_owned(), egui::FontId::proportional(14.0), color);
+    let pos = rect.center() - galley.size() * 0.5;
+    ui.painter().galley(pos, galley, color);
+}
+
 #[cfg(not(target_os = "macos"))]
 fn window_control_button(
     ui: &mut egui::Ui,
@@ -402,13 +431,9 @@ fn window_control_button(
     // beveled frame(同尺寸/同圆角5/同底部高光), 避免"更大、圆角更小"的视觉差异。
     if close_hover {
         paint_close_hover_frame(ui, rect, &response, opacity);
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            icon,
-            egui::FontId::proportional(14.0),
-            egui::Color32::WHITE.gamma_multiply(opacity),
-        );
+        // 关闭 hover 用白色字, 与红色底对比; galley 精确居中保证 ✕ 与其它字
+        // 形同高同宽, 不再显得更大或偏位。
+        paint_centered_symbol(ui, rect, icon, egui::Color32::WHITE.gamma_multiply(opacity));
         return response;
     }
 
@@ -421,13 +446,7 @@ fn window_control_button(
     } else {
         ui.visuals().text_color().gamma_multiply(opacity)
     };
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        icon,
-        egui::FontId::proportional(14.0),
-        icon_color,
-    );
+    paint_centered_symbol(ui, rect, icon, icon_color);
     response
 }
 
@@ -558,15 +577,20 @@ mod tests {
         assert!(source.contains("crate::symbols::WINDOW_MAXIMIZE"));
         assert!(source.contains("crate::symbols::WINDOW_RESTORE"));
         assert!(source.contains("crate::symbols::WINDOW_CLOSE"));
-        // 最大化按钮按当前 maximized 状态在 ▢/❐ 之间切换。
+        // 最大化按钮按当前 maximized 状态在 ▢/❐ 之间切换, 但按钮本身不常驻选中高亮。
         assert!(source.contains("i.viewport().maximized.unwrap_or(false)"));
+        assert!(source.contains("let maximize = window_control_button("));
+        assert!(source.contains("maximize_icon,"));
+        assert!(source.contains("false,"));
         // TitlebarActions 暴露三个窗口控制意图。
         assert!(source.contains("pub minimize: bool"));
         assert!(source.contains("pub maximize: bool"));
         assert!(source.contains("pub close: bool"));
-        // 关闭按钮 hover 红色高亮。
+        // 关闭按钮 hover 红色高亮, 图标按字形包围盒精确居中。
         assert!(source.contains("WindowButtonAccent::Close"));
         assert!(source.contains("196, 43, 28"));
+        assert!(source.contains("fn paint_centered_symbol"));
+        assert!(source.contains("layout_no_wrap"));
         // 标题栏布局为窗口按钮预留宽度。
         assert!(source.contains("fn window_buttons_width("));
         assert!(source.contains("TITLEBAR_BUTTON_SIZE * 3.0"));
@@ -638,14 +662,12 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_hides_titlebar_on_all_platforms_and_squares_window_chrome() {
+    fn fullscreen_uses_hot_edge_reveal_off_macos_and_squares_window_chrome() {
         let source = include_str!("titlebar.rs")
             .split("#[cfg(test)]")
             .next()
             .unwrap();
 
-        // 全屏隐藏标题栏不再是 macOS 专属: titlebar_opacity 在平台分支之前
-        // 统一提前返回 0.0。
         let opacity_source = source
             .split("fn titlebar_opacity")
             .nth(1)
@@ -653,14 +675,26 @@ mod tests {
             .split("fn titlebar_contents")
             .next()
             .unwrap();
-        let fullscreen_check = opacity_source
-            .find("i.viewport().fullscreen.unwrap_or(false)")
-            .unwrap();
+
+        // macOS 全屏仍完全隐藏标题栏。
         let macos_branch = opacity_source
-            .find("#[cfg(target_os = \"macos\")]")
+            .split("#[cfg(target_os = \"macos\")]")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(not(target_os = \"macos\"))]")
+            .next()
             .unwrap();
-        assert!(fullscreen_check < macos_branch, "全屏检查应在平台分支之前");
-        assert!(opacity_source.contains("return 0.0"));
+        assert!(macos_branch.contains("viewport().fullscreen.unwrap_or(false)"));
+        assert!(macos_branch.contains("0.0"));
+
+        // 非 macOS 全屏只在顶部热区显出标题栏, 平时淡出不遮挡画面。
+        let non_macos_branch = opacity_source
+            .split("#[cfg(not(target_os = \"macos\"))]")
+            .nth(1)
+            .unwrap();
+        assert!(non_macos_branch.contains("let fullscreen"));
+        assert!(non_macos_branch.contains("FULLSCREEN_TITLEBAR_REVEAL_EDGE"));
+        assert!(non_macos_branch.contains("pos.y <= FULLSCREEN_TITLEBAR_REVEAL_EDGE"));
 
         // 全屏/最大化: 窗口背景退化为直角无描边, 不再显示边缘 resize handles。
         assert!(source.contains("fn window_is_floating"));
