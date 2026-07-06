@@ -223,7 +223,27 @@ fn volume_popup(
 
 pub fn toggle_fullscreen(ctx: &egui::Context) {
     let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+    set_fullscreen(ctx, !fs);
+}
+
+/// 进入/退出全屏:
+/// - 进入时先清掉已最大化状态。Windows 上若窗口仍持 `WS_MAXIMIZE`, winit 的
+///   borderless 全屏虽 `SetWindowPos` 到显示器尺寸, 但最大化样式会把窗口钳在
+///   工作区(不含任务栏), 表现为"最大化后切全屏底部仍露出任务栏 dock"。
+///   先 `Maximized(false)` 退出最大化, 再发 `Fullscreen(true)`, 窗口才真正覆盖
+///   到显示器全尺寸; 同时置 `AlwaysOnTop` 把 z 序抬到任务栏之上, 双保险。
+/// - 退出时还原普通层级, 不在非全屏时长期浮在其它窗口上。
+pub fn set_fullscreen(ctx: &egui::Context, fullscreen: bool) {
+    if fullscreen {
+        // 退出最大化: 顺序在 Fullscreen 前, 让全屏命令接过窗口尺寸控制权。
+        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+    }
+    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
+    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if fullscreen {
+        egui::WindowLevel::AlwaysOnTop
+    } else {
+        egui::WindowLevel::Normal
+    }));
 }
 
 /// 字幕轨道下拉; 选中某轨返回 SelectSubtitleTrack(stream_index)。
@@ -391,6 +411,19 @@ mod tests {
             .unwrap();
 
         assert!(source.contains("pub fn toggle_fullscreen"));
-        assert!(source.contains("ViewportCommand::Fullscreen(!fs)"));
+        // 进出全屏走集中的 set_fullscreen: 发送 Fullscreen 命令并同步窗口层级
+        // (进入全屏置顶, 退出还原), 避免最大化→全屏时任务栏压在窗口上。
+        assert!(source.contains("pub fn set_fullscreen"));
+        assert!(
+            source.contains("ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen))")
+        );
+        assert!(source.contains("ViewportCommand::WindowLevel"));
+        assert!(source.contains("egui::WindowLevel::AlwaysOnTop"));
+        assert!(source.contains("egui::WindowLevel::Normal"));
+        assert!(source.contains("set_fullscreen(ctx, !fs)"));
+        // 进入全屏前先清掉已最大化: 否则 WS_MAXIMIZE 样式把 borderless 全屏钳在工作区、
+        // 底部露出任务栏。
+        assert!(source.contains("if fullscreen {"));
+        assert!(source.contains("egui::ViewportCommand::Maximized(false)"));
     }
 }
