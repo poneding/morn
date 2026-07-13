@@ -24,6 +24,8 @@ pub const TITLEBAR_BOTTOM_OFFSET: f32 = TITLEBAR_HEIGHT + (TITLEBAR_INNER_MARGIN
 const WINDOW_CORNER_RADIUS: u8 = crate::visuals::PANEL_CORNER_RADIUS;
 #[cfg(not(target_os = "macos"))]
 const WINDOW_RESIZE_HANDLE: f32 = 6.0;
+#[cfg(not(target_os = "macos"))]
+const WINDOW_CAPTION_BUTTON_WIDTH: f32 = 46.0;
 
 #[derive(Default)]
 pub struct TitlebarActions {
@@ -156,6 +158,30 @@ fn resize_handles(
             egui::Rect::from_min_max(egui::pos2(right - h, bottom - h), egui::pos2(right, bottom)),
         ),
     ]
+}
+
+/// 右上角三个 Windows 控制按钮(–▢✕)组成的簇矩形: 宽 = 3 个按钮, 高 = 满标题栏高,
+/// 贴齐窗口右上角。caption Area 依此定位, 使按钮顶到边、右到边。
+#[cfg(not(target_os = "macos"))]
+fn window_caption_cluster_rect(screen_rect: egui::Rect) -> egui::Rect {
+    let width = WINDOW_CAPTION_BUTTON_WIDTH * 3.0;
+    egui::Rect::from_min_size(
+        egui::pos2(screen_rect.right() - width, screen_rect.top()),
+        egui::vec2(width, TITLEBAR_BOTTOM_OFFSET),
+    )
+}
+
+/// 关闭按钮 hover 背景的圆角: 它贴窗口右上角, 浮动窗口该角为圆角(Win11 DWM 裁剪 /
+/// Win10 自绘圆角背景, 半径 WINDOW_CORNER_RADIUS), 故 hover 填充 ne 角需跟随; 最大化/
+/// 全屏时窗口为直角, ne 也取 0。其余三角恒直角。
+#[cfg(not(target_os = "macos"))]
+fn close_button_corner_radius(floating: bool) -> egui::CornerRadius {
+    egui::CornerRadius {
+        nw: 0,
+        ne: if floating { WINDOW_CORNER_RADIUS } else { 0 },
+        sw: 0,
+        se: 0,
+    }
 }
 
 pub fn show_custom_titlebar(
@@ -742,5 +768,37 @@ mod tests {
         assert!(source.contains("ui.allocate_exact_size"));
         assert!(button_source.contains("egui::Sense::click_and_drag()"));
         assert!(!source.contains("egui::Button::new"));
+    }
+
+    #[test]
+    fn caption_cluster_sits_flush_to_top_right_corner() {
+        let screen = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 700.0));
+        let cluster = super::window_caption_cluster_rect(screen);
+        // 宽 = 3 个按钮, 高 = 满标题栏高。
+        assert_eq!(cluster.width(), super::WINDOW_CAPTION_BUTTON_WIDTH * 3.0);
+        assert_eq!(cluster.height(), super::TITLEBAR_BOTTOM_OFFSET);
+        // 顶到边、右到边。
+        assert_eq!(cluster.right(), screen.right());
+        assert_eq!(cluster.top(), screen.top());
+    }
+
+    #[test]
+    fn caption_button_width_is_windows_native_46() {
+        assert_eq!(super::WINDOW_CAPTION_BUTTON_WIDTH, 46.0);
+    }
+
+    #[test]
+    fn close_button_rounds_ne_only_when_floating() {
+        let floating = super::close_button_corner_radius(true);
+        assert_eq!(floating.ne, super::WINDOW_CORNER_RADIUS);
+        assert_eq!(floating.nw, 0);
+        assert_eq!(floating.se, 0);
+        assert_eq!(floating.sw, 0);
+
+        let maximized = super::close_button_corner_radius(false);
+        assert_eq!(maximized.ne, 0);
+        assert_eq!(maximized.nw, 0);
+        assert_eq!(maximized.se, 0);
+        assert_eq!(maximized.sw, 0);
     }
 }
