@@ -238,6 +238,9 @@ pub fn show_custom_titlebar(
         });
 
     // 三个 Windows 控制按钮独立成右上角贴边满高的 Area(macOS 用原生交通灯, 不画)。
+    // 必须在 show_resize_handles 之后绘制: 关闭按钮 rect 覆盖了右上角 ne resize handle,
+    // 同为 Foreground 时 egui 把指针优先给后添加的 Area, 故此调用顺序保证右上角命中
+    // 关闭按钮而非 ne resize。切勿把本调用移到 resize handles 之前。
     #[cfg(not(target_os = "macos"))]
     show_window_caption_buttons(ctx, screen_rect, opacity, &mut actions);
 
