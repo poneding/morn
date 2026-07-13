@@ -34,6 +34,8 @@ mod titlebar;
 mod updater;
 mod video_view;
 mod visuals;
+#[cfg(target_os = "windows")]
+mod windows;
 
 rust_i18n::i18n!("locales", fallback = "en");
 
@@ -70,6 +72,7 @@ fn main() -> eframe::Result {
     let native_options = eframe::NativeOptions {
         viewport: app_viewport(initial_inner_size).with_icon(app_icon()),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: app_wgpu_options(),
         ..Default::default()
     };
     eframe::run_native(
@@ -77,6 +80,19 @@ fn main() -> eframe::Result {
         native_options,
         Box::new(move |cc| Ok(Box::new(PlayerApp::new(cc, initial_paths)))),
     )
+}
+
+/// Windows 把交换链在途帧上限从默认 2 降到 1。DXGI flip 模型在窗口尺寸变化时,
+/// 会把迟到的旧尺寸帧整幅拉伸铺满新窗口; 在途帧越多, 拖拽缩放/最大化时旧帧拉伸
+/// 残影越久。UI 帧构建成本低, 降到 1 不影响播放吞吐。其余平台保持默认: macOS 的
+/// resize 表现依赖已调好的 present 行为(见 Cargo.toml 关闭
+/// `macos-window-resize-jitter-fix` 的说明), 不额外扰动。
+fn app_wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
+    if cfg!(target_os = "windows") {
+        wgpu_options.desired_maximum_frame_latency = Some(1);
+    }
+    wgpu_options
 }
 
 fn app_viewport(initial_inner_size: [f32; 2]) -> eframe::egui::ViewportBuilder {
@@ -174,6 +190,20 @@ mod tests {
         // Non-macOS keeps the custom borderless transparent window path.
         assert!(source.contains(".with_decorations(false)"));
         assert!(source.contains(".with_transparent(true)"));
+    }
+
+    #[test]
+    fn windows_lowers_swapchain_frame_latency_to_reduce_resize_stretch() {
+        let source = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        // Windows 在途帧上限降为 1, 缩短窗口尺寸变化时旧帧被拉伸的残影;
+        // 其余平台不改 wgpu 默认 present 配置。
+        assert!(source.contains("wgpu_options: app_wgpu_options()"));
+        assert!(source.contains("cfg!(target_os = \"windows\")"));
+        assert!(source.contains("desired_maximum_frame_latency = Some(1)"));
     }
 
     #[test]

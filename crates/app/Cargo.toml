@@ -44,9 +44,15 @@ rust-i18n = "4"
 semver = "1"
 serde.workspace = true
 ureq = { version = "2", default-features = false, features = ["json", "tls"] }
-# 仅用于首帧拿到 NSView 句柄设置 layerContentsPlacement(掩盖 resize 旧帧拉伸抖动)。
+# 首帧拿原生窗口句柄做 resize 旧帧拉伸掩盖: macOS 设 NSView layerContentsPlacement,
+# Windows 取 HWND 禁用 DWM 过渡动画(见 macos.rs / windows.rs)。
 # Cargo.lock 中已是 eframe 的传递依赖 0.6.x, 不引入新版本。
 raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# 禁用 DWM 窗口过渡动画(windows.rs), 掩盖最大化/还原时旧帧被拉伸的抖动。
+# 0.52 与 winit 的传递依赖同版本, 不引入新的重复构建。
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"

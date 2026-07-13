@@ -124,13 +124,21 @@ impl eframe::App for PlayerApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, eframe_frame: &mut eframe::Frame) {
-        // macOS: 首帧把 contentView 的 layer 放置策略改为 topLeft, 掩盖 resize/最大化时
-        // 旧帧被拉伸的抖动(详见 macos::apply_resize_glitch_masking)。仅执行一次, 失败
-        // 则下一帧重试。
-        #[cfg(target_os = "macos")]
+        // macOS/Windows: 首帧应用各自的 resize 旧帧拉伸掩盖(macOS 改 layer 放置
+        // 策略, Windows 禁用 DWM 过渡动画; 详见 macos.rs / windows.rs)。仅执行一次,
+        // 失败则下一帧重试。
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if !self.resize_glitch_mask_applied {
-            self.resize_glitch_mask_applied =
-                crate::macos::apply_resize_glitch_masking(eframe_frame);
+            #[cfg(target_os = "macos")]
+            {
+                self.resize_glitch_mask_applied =
+                    crate::macos::apply_resize_glitch_masking(eframe_frame);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                self.resize_glitch_mask_applied =
+                    crate::windows::apply_resize_glitch_masking(eframe_frame);
+            }
         }
 
         let ctx = ui.ctx().clone();

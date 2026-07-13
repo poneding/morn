@@ -169,7 +169,7 @@ impl PlayerApp {
                 self.set_shortcut_notice(format!("{}：{}", t!("playlist"), t!("closed")));
             }
             EscapeShortcutAction::ExitFullscreen => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                crate::controls::set_fullscreen(ctx, false);
             }
             EscapeShortcutAction::None => {}
         }

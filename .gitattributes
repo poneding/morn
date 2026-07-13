@@ -1,1 +1,10 @@
-scripts/release/*.sh text eol=lf
+# 统一以 LF 检出/入库: 仓库内大量 include_str! 源码断言依赖 LF 行尾,
+# Windows 上 core.autocrlf=true 会把工作区文件改写成 CRLF 导致这些断言失败。
+# eol=lf 优先级高于 autocrlf, 保证任何平台检出都是 LF。
+* text=auto eol=lf
+
+# 二进制资源不做任何行尾转换。
+*.png binary
+*.ico binary
+*.icns binary
+*.mp4 binary
