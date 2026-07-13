@@ -237,6 +237,10 @@ pub fn show_custom_titlebar(
                 });
         });
 
+    // 三个 Windows 控制按钮独立成右上角贴边满高的 Area(macOS 用原生交通灯, 不画)。
+    #[cfg(not(target_os = "macos"))]
+    show_window_caption_buttons(ctx, screen_rect, opacity, &mut actions);
+
     actions
 }
 
@@ -301,11 +305,6 @@ fn titlebar_contents(
         let drag_width = (ui.available_width() - buttons_width).max(0.0);
         drag_region(ui, title, drag_width, opacity);
         titlebar_app_buttons(ui, show_playlist, show_settings, opacity, actions);
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            window_buttons(ui, opacity, actions);
-        }
     });
 }
 
@@ -315,7 +314,7 @@ fn total_trailing_buttons_width(ui: &egui::Ui) -> f32 {
     let app_width = titlebar_app_buttons_width(ui);
     #[cfg(not(target_os = "macos"))]
     {
-        app_width + window_buttons_width(ui)
+        app_width + window_buttons_width()
     }
     #[cfg(target_os = "macos")]
     {
@@ -363,61 +362,137 @@ fn titlebar_app_buttons(
 }
 
 #[cfg(not(target_os = "macos"))]
-fn window_buttons_width(ui: &egui::Ui) -> f32 {
-    // 最小化 + 最大化 + 关闭三个按钮, 复用与 app 按钮相同的方形尺寸与间距。
-    TITLEBAR_BUTTON_SIZE * 3.0 + ui.spacing().item_spacing.x * 2.0
+fn window_buttons_width() -> f32 {
+    // 三个按钮无缝相邻(Windows 原生), 簇宽 = 3 × 单按钮宽。
+    WINDOW_CAPTION_BUTTON_WIDTH * 3.0
 }
 
+/// caption 按钮种类, 决定 hover 配色与圆角。
 #[cfg(not(target_os = "macos"))]
-fn window_buttons(ui: &mut egui::Ui, opacity: f32, actions: &mut TitlebarActions) {
-    let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+enum CaptionKind {
+    Minimize,
+    Maximize,
+    Close,
+}
 
-    let minimize = window_control_button(
-        ui,
-        crate::symbols::WINDOW_MINIMIZE,
-        false,
-        WindowButtonAccent::Normal,
-        opacity,
-    );
-    if minimize.clicked() {
-        actions.minimize = true;
-    }
-
+/// 右上角三个 Windows 控制按钮: 独立 Foreground Area, 贴窗口右上角、满标题栏高、
+/// 彼此无缝。hover 背景为直角色块覆盖到边缘; 关闭按钮 hover 红底白字, 其右上角在
+/// 浮动窗口跟随窗口圆角。随标题栏 opacity 淡入淡出。
+#[cfg(not(target_os = "macos"))]
+fn show_window_caption_buttons(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    opacity: f32,
+    actions: &mut TitlebarActions,
+) {
+    let cluster = window_caption_cluster_rect(screen_rect);
+    let floating = window_is_floating(ctx);
+    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
     let maximize_icon = if maximized {
         crate::symbols::WINDOW_RESTORE
     } else {
         crate::symbols::WINDOW_MAXIMIZE
     };
-    // 最大化按钮不记录"选中"状态(它不是像 ☰/⚙ 那样的开关); 只有图标在 ▢/❐ 间
-    // 切换, 避免按下后整按钮常驻 selection 高亮色。
-    let maximize = window_control_button(
-        ui,
-        maximize_icon,
-        false,
-        WindowButtonAccent::Normal,
-        opacity,
-    );
-    if maximize.clicked() {
-        actions.maximize = true;
-    }
 
-    let close = window_control_button(
-        ui,
-        crate::symbols::WINDOW_CLOSE,
-        false,
-        WindowButtonAccent::Close,
-        opacity,
-    );
-    if close.clicked() {
-        actions.close = true;
-    }
+    egui::Area::new(egui::Id::new("window_caption_buttons"))
+        .fixed_pos(cluster.min)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            ui.set_min_size(cluster.size());
+            // 按钮无缝相邻: 去掉 item_spacing。
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            ui.horizontal(|ui| {
+                if caption_button(
+                    ui,
+                    CaptionKind::Minimize,
+                    crate::symbols::WINDOW_MINIMIZE,
+                    floating,
+                    opacity,
+                )
+                .clicked()
+                {
+                    actions.minimize = true;
+                }
+                if caption_button(
+                    ui,
+                    CaptionKind::Maximize,
+                    maximize_icon,
+                    floating,
+                    opacity,
+                )
+                .clicked()
+                {
+                    actions.maximize = true;
+                }
+                if caption_button(
+                    ui,
+                    CaptionKind::Close,
+                    crate::symbols::WINDOW_CLOSE,
+                    floating,
+                    opacity,
+                )
+                .clicked()
+                {
+                    actions.close = true;
+                }
+            });
+        });
 }
 
-/// 关闭按钮 hover 时的强调色, 区别于普通窗口按钮。
+/// 画单个 caption 按钮: 满高定宽方块, hover 直角背景(关闭按钮红底、ne 角跟随窗口),
+/// 图标精确居中。
 #[cfg(not(target_os = "macos"))]
-enum WindowButtonAccent {
-    Normal,
-    Close,
+fn caption_button(
+    ui: &mut egui::Ui,
+    kind: CaptionKind,
+    icon: &'static str,
+    floating: bool,
+    opacity: f32,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(WINDOW_CAPTION_BUTTON_WIDTH, TITLEBAR_BOTTOM_OFFSET),
+        egui::Sense::click(),
+    );
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+
+    let is_close = matches!(kind, CaptionKind::Close);
+    if hovered || pressed {
+        let fill = match (is_close, pressed) {
+            (true, true) => egui::Color32::from_rgb(0xB2, 0x27, 0x19),
+            (true, false) => egui::Color32::from_rgb(196, 43, 28),
+            (false, true) => egui::Color32::from_rgb(0x2F, 0x2F, 0x2F),
+            (false, false) => egui::Color32::from_rgb(0x3A, 0x3A, 0x3A),
+        }
+        .gamma_multiply(opacity);
+        let radius = if is_close {
+            close_button_corner_radius(floating)
+        } else {
+            egui::CornerRadius::ZERO
+        };
+        paint_caption_hover(ui, rect, radius, fill);
+    }
+
+    // 关闭按钮 hover 用白字(压红底); 其余按钮恒用正文色。
+    let icon_color = if is_close && (hovered || pressed) {
+        egui::Color32::WHITE
+    } else {
+        ui.visuals().text_color()
+    }
+    .gamma_multiply(opacity);
+    paint_centered_symbol(ui, rect, icon, icon_color);
+    response
+}
+
+/// caption 按钮 hover 背景: 纯色直角(或关闭按钮的单角圆)填充, 铺满按钮矩形到边缘。
+#[cfg(not(target_os = "macos"))]
+fn paint_caption_hover(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    radius: egui::CornerRadius,
+    fill: egui::Color32,
+) {
+    ui.painter().rect_filled(rect, radius, fill);
 }
 
 /// 在按钮 rect 内把单个符号字形按其 galley 包围盒精确居中。
@@ -436,85 +511,6 @@ fn paint_centered_symbol(
             .layout_no_wrap(icon.to_owned(), egui::FontId::proportional(14.0), color);
     let pos = rect.center() - galley.size() * 0.5;
     ui.painter().galley(pos, galley, color);
-}
-
-#[cfg(not(target_os = "macos"))]
-fn window_control_button(
-    ui: &mut egui::Ui,
-    icon: &'static str,
-    active: bool,
-    accent: WindowButtonAccent,
-    opacity: f32,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(TITLEBAR_BUTTON_SIZE, TITLEBAR_BUTTON_SIZE),
-        egui::Sense::click_and_drag(),
-    );
-    let hovered = response.hovered() || response.is_pointer_button_down_on();
-    let close_hover = matches!(accent, WindowButtonAccent::Close) && hovered && !active;
-
-    // 关闭按钮 hover 时用红色 frame, 其余情况复用与其他标题栏按钮完全一致的
-    // beveled frame(同尺寸/同圆角5/同底部高光), 避免"更大、圆角更小"的视觉差异。
-    if close_hover {
-        paint_close_hover_frame(ui, rect, &response, opacity);
-        // 关闭 hover 用白色字, 与红色底对比; galley 精确居中保证 ✕ 与其它字
-        // 形同高同宽, 不再显得更大或偏位。
-        paint_centered_symbol(ui, rect, icon, egui::Color32::WHITE.gamma_multiply(opacity));
-        return response;
-    }
-
-    if active || hovered {
-        crate::visuals::beveled_button_frame_at(ui, rect, &response, active, opacity);
-    }
-
-    let icon_color = if active {
-        ui.visuals().selection.stroke.color.gamma_multiply(opacity)
-    } else {
-        ui.visuals().text_color().gamma_multiply(opacity)
-    };
-    paint_centered_symbol(ui, rect, icon, icon_color);
-    response
-}
-
-/// 关闭按钮 hover 时的红色 frame: 与 `beveled_button_frame_at` 几何完全一致
-/// (同 rect.shrink(0.5)、同 CONTROL_CORNER_RADIUS 圆角、同底部高光线), 仅颜色改红,
-/// 保证关闭按钮 hover 时尺寸/圆角与其他按钮一致, 只是配色不同。
-#[cfg(not(target_os = "macos"))]
-fn paint_close_hover_frame(
-    ui: &egui::Ui,
-    rect: egui::Rect,
-    response: &egui::Response,
-    opacity: f32,
-) {
-    use crate::visuals::{BEVEL_SHADOW_ALPHA, CONTROL_CORNER_RADIUS};
-    let frame_rect = rect.shrink(0.5);
-    let radius = egui::CornerRadius::same(CONTROL_CORNER_RADIUS);
-    let fill = egui::Color32::from_rgb(196, 43, 28).gamma_multiply(opacity);
-    ui.painter().rect_filled(frame_rect, radius, fill);
-    ui.painter().rect_stroke(
-        frame_rect,
-        radius,
-        egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgb(140, 30, 20).gamma_multiply(opacity),
-        ),
-        egui::StrokeKind::Inside,
-    );
-    // 与 beveled_button_frame_at 一致的底部阴影线, 保持立体感统一。
-    let pressed = response.is_pointer_button_down_on();
-    let bottom_color = egui::Color32::from_black_alpha(if pressed {
-        BEVEL_SHADOW_ALPHA / 2
-    } else {
-        BEVEL_SHADOW_ALPHA
-    })
-    .gamma_multiply(opacity);
-    ui.painter().line_segment(
-        [
-            egui::pos2(frame_rect.left() + 1.5, frame_rect.bottom() - 1.0),
-            egui::pos2(frame_rect.right() - 1.5, frame_rect.bottom() - 1.0),
-        ],
-        egui::Stroke::new(1.0, bottom_color),
-    );
 }
 
 fn titlebar_icon_button(
@@ -596,35 +592,66 @@ mod tests {
             .next()
             .unwrap();
 
-        // 最小化/最大化/关闭三个窗口控制按钮仅非 macOS 渲染。
-        assert!(source.contains("fn window_buttons("));
-        assert!(source.contains("fn window_control_button("));
+        // 三个窗口控制按钮改由独立右上角 caption Area 渲染(仅非 macOS)。
+        assert!(source.contains("fn show_window_caption_buttons("));
+        assert!(source.contains("fn caption_button("));
+        assert!(source.contains("enum CaptionKind"));
         assert!(source.contains("crate::symbols::WINDOW_MINIMIZE"));
         assert!(source.contains("crate::symbols::WINDOW_MAXIMIZE"));
         assert!(source.contains("crate::symbols::WINDOW_RESTORE"));
         assert!(source.contains("crate::symbols::WINDOW_CLOSE"));
-        // 最大化按钮按当前 maximized 状态在 ▢/❐ 之间切换, 但按钮本身不常驻选中高亮。
+        // 最大化按钮按 maximized 在 ▢/❐ 间切换。
         assert!(source.contains("i.viewport().maximized.unwrap_or(false)"));
-        assert!(source.contains("let maximize = window_control_button("));
-        assert!(source.contains("maximize_icon,"));
-        assert!(source.contains("false,"));
         // TitlebarActions 暴露三个窗口控制意图。
         assert!(source.contains("pub minimize: bool"));
         assert!(source.contains("pub maximize: bool"));
         assert!(source.contains("pub close: bool"));
-        // 关闭按钮 hover 红色高亮, 图标按字形包围盒精确居中。
-        assert!(source.contains("WindowButtonAccent::Close"));
+        // 关闭按钮 hover 红底(#C42B1C)白字; 图标按字形包围盒精确居中。
         assert!(source.contains("196, 43, 28"));
+        assert!(source.contains("egui::Color32::WHITE"));
         assert!(source.contains("fn paint_centered_symbol"));
         assert!(source.contains("layout_no_wrap"));
-        // 标题栏布局为窗口按钮预留宽度。
+        // caption 簇预留宽度 = 3 × 单按钮宽, 无缝无间距。
         assert!(source.contains("fn window_buttons_width("));
-        assert!(source.contains("TITLEBAR_BUTTON_SIZE * 3.0"));
-        // 关闭按钮 hover 用独立的 paint_close_hover_frame, 与其他按钮同圆角(CONTROL_CORNER_RADIUS),
-        // 不再叠半径2的额外红色层。
-        assert!(source.contains("fn paint_close_hover_frame"));
-        assert!(source.contains("CONTROL_CORNER_RADIUS"));
-        assert!(!source.contains("rect_filled(rect.shrink(0.5), 2,"));
+        assert!(source.contains("WINDOW_CAPTION_BUTTON_WIDTH * 3.0"));
+        // hover 背景为直角覆盖到边缘, 不再复用旧 beveled/close-hover frame。
+        assert!(source.contains("fn paint_caption_hover("));
+        assert!(!source.contains("fn window_control_button("));
+        assert!(!source.contains("fn paint_close_hover_frame("));
+    }
+
+    #[test]
+    fn caption_buttons_render_in_dedicated_top_right_area() {
+        let source = include_str!("titlebar.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+
+        // 独立右上角 Area, Foreground, fixed_pos 到簇矩形左上角。
+        assert!(source.contains("fn show_window_caption_buttons("));
+        assert!(source.contains("window_caption_buttons"));
+        assert!(source.contains("window_caption_cluster_rect(screen_rect)"));
+        assert!(source.contains("egui::Order::Foreground"));
+
+        // 直角 hover 背景配色 verbatim。
+        assert!(source.contains("0x3A, 0x3A, 0x3A"));
+        assert!(source.contains("0x2F, 0x2F, 0x2F"));
+        assert!(source.contains("196, 43, 28"));
+        assert!(source.contains("0xB2, 0x27, 0x19"));
+
+        // 关闭按钮圆角走 close_button_corner_radius; 满标题栏高。
+        assert!(source.contains("close_button_corner_radius("));
+        assert!(source.contains("WINDOW_CAPTION_BUTTON_WIDTH"));
+
+        // caption 按钮不再复用 beveled/close-hover 旧 frame。
+        assert!(!source.contains("fn window_control_button("));
+        assert!(!source.contains("fn paint_close_hover_frame("));
+        assert!(!source.contains("enum WindowButtonAccent"));
+
+        // 三个窗口意图仍暴露。
+        assert!(source.contains("actions.minimize = true"));
+        assert!(source.contains("actions.maximize = true"));
+        assert!(source.contains("actions.close = true"));
     }
 
     #[test]
